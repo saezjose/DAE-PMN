@@ -229,7 +229,10 @@ def asignar_mesa_por_capacidad(pax: int, zona_preferida: str) -> str | None:
     candidatas = []
     for nombre, datos in obtener_registro_mesas().items():
         capacidad = datos["capacidad"]
-        if capacidad >= pax and datos["estado"] == "DISPONIBLE" and datos["zona"] == zona_preferida:
+        # Filtro corregido: si es "Cualquiera", ignora la restriccion espacial
+        match_zona = (zona_preferida == "Cualquiera" or datos["zona"] == zona_preferida)
+        
+        if capacidad >= pax and datos["estado"] == "DISPONIBLE" and match_zona:
             candidatas.append((capacidad, nombre))
 
     if not candidatas:
@@ -261,10 +264,13 @@ def tiempo_proyeccion_mesa(nombre: str) -> int | None:
 
 
 def sugerir_mesa_para_pax(pax: int, zona_preferida: str) -> tuple[str, int] | None:
-    candidatos: list[tuple[int, int, str]] = []
+    candidatos = []
     for nombre, datos in obtener_registro_mesas().items():
         capacidad = datos["capacidad"]
-        if capacidad >= pax and datos["zona"] == zona_preferida:
+        # Filtro corregido: si es "Cualquiera", ignora la restriccion espacial
+        match_zona = (zona_preferida == "Cualquiera" or datos["zona"] == zona_preferida)
+        
+        if capacidad >= pax and match_zona:
             tiempo = tiempo_proyeccion_mesa(nombre)
             if tiempo is not None:
                 candidatos.append((tiempo, capacidad, nombre))
@@ -364,12 +370,12 @@ def cargar_siguiente_reserva() -> None:
     st.session_state.reserva_activa = siguiente["nombre"]
     st.session_state.reserva_pax = siguiente["pax"]
     st.session_state.reserva_zona = siguiente["zona"]
+    st.session_state.duracion_bloque_min = siguiente.get("tiempo", 90)
     st.session_state.mesa_reservada = None
     st.session_state.reserva_A = "CONFIRMA"
     st.session_state.reserva_inicio = None
     st.session_state.no_show_deadline = None
     st.session_state.checkin_time = None
-    st.session_state.duracion_bloque_min = 90
     st.session_state.cluster_creado = False
     st.session_state.alerta_garzon = False
     st.session_state.alerta_colision = False
@@ -428,12 +434,23 @@ with st.sidebar:
             st.session_state.nueva_mesa_zona = nueva_mesa_zona
             st.rerun()
 
-    st.markdown("### Reservas")
-    if st.button("Agregar reserva pendiente"):
-        nueva = crear_reserva_pendiente(st.session_state.next_reserva_idx)
-        st.session_state.reservas_pendientes.append(nueva)
-        st.session_state.next_reserva_idx += 1
-        st.rerun()
+    st.markdown("### Ingreso Manual (Walk-in / Reserva)")
+    with st.form("form_ingreso"):
+        pax_ingreso = st.number_input("Cantidad de personas", min_value=1, max_value=12, value=2)
+        zona_ingreso = st.selectbox("Preferencia de Zona", ["Cualquiera", "Interior", "Terraza"])
+        tiempo_ingreso = st.number_input("Tiempo estimado (minutos)", min_value=30, max_value=180, value=90, step=15)
+        submit_ingreso = st.form_submit_button("Registrar Ingreso al Sistema")
+
+        if submit_ingreso:
+            nueva = {
+                "nombre": nombre_reserva(st.session_state.next_reserva_idx),
+                "pax": pax_ingreso,
+                "zona": zona_ingreso,
+                "tiempo": tiempo_ingreso
+            }
+            st.session_state.reservas_pendientes.append(nueva)
+            st.session_state.next_reserva_idx += 1
+            st.rerun()
 
     st.write(f"Reserva activa: **{st.session_state.reserva_activa}**")
     st.write(f"Personas de la reserva activa: **{st.session_state.reserva_pax}**")
