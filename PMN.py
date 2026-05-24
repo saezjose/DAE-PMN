@@ -16,6 +16,17 @@ MESAS_CAPACIDAD = {
     "Mesa 04": 2,
 }
 
+MESAS_ZONA = {
+    "Mesa 12": "Interior",
+    "Mesa 05": "Interior",
+    "Mesa 01": "Interior",
+    "Mesa 02": "Interior",
+    "Mesa 03": "Terraza",
+    "Mesa 04": "Terraza",
+}
+
+MESAS_FIJAS = list(MESAS_CAPACIDAD.keys())
+
 
 def init_state() -> None:
     now = datetime.now().replace(second=0, microsecond=0)
@@ -27,6 +38,7 @@ def init_state() -> None:
         "reserva_A": "CONFIRMA",
         "reserva_activa": "Reserva A",
         "reserva_pax": 4,
+        "reserva_zona": random.choice(["Interior", "Terraza"]),
         "mesa_reservada": None,
         "next_reserva_idx": 2,
         "reservas_pendientes": [],
@@ -51,12 +63,10 @@ def init_state() -> None:
             "Mesa 03": None,
             "Mesa 04": None,
         },
-        "mesas_extra": {
-            "Mesa 01": "DISPONIBLE",
-            "Mesa 02": "OCUPADA",
-            "Mesa 03": "DISPONIBLE",
-            "Mesa 04": "EN LIMPIEZA",
-        },
+        "mesas_adicionales": {},
+        "nueva_mesa_nombre": "Mesa 07",
+        "nueva_mesa_capacidad": 2,
+        "nueva_mesa_zona": "Interior",
     }
 
     for key, value in defaults.items():
@@ -81,12 +91,13 @@ def crear_reserva_pendiente(idx: int) -> dict:
     return {
         "nombre": nombre_reserva(idx),
         "pax": random.randint(2, 6),
+        "zona": random.choice(["Interior", "Terraza"]),
     }
 
 
 def estado_flujo_actual() -> str:
     if st.session_state.reserva_A == "RESERVADA" and st.session_state.mesa_reservada:
-        return f"{st.session_state.mesa_reservada} reservada para {st.session_state.reserva_pax} personas"
+        return f"{st.session_state.mesa_reservada} ({st.session_state.reserva_zona}) reservada para {st.session_state.reserva_pax} personas"
     estado = st.session_state.reserva_A
     mapping = {
         "CONFIRMA": "Solicitud recibida",
@@ -102,7 +113,8 @@ def estado_flujo_actual() -> str:
 
 
 def render_mesa_card(nombre: str, capacidad: int, estado: str) -> None:
-    etiqueta = f"**{nombre}** (Cap. {capacidad})\n\nEstado: {estado}"
+    zona = MESAS_ZONA.get(nombre, "Interior")
+    etiqueta = f"**{nombre}** (Cap. {capacidad})\n\nZona: {zona}\n\nEstado: {estado}"
     if estado == "OCUPADA":
         st.error(etiqueta)
     elif estado in {"EN LIMPIEZA", "BLOQUEADA_C", "RESERVADA"}:
@@ -123,6 +135,25 @@ def card_style_for_estado(estado: str, selected: bool = False) -> str:
     if selected:
         base += " box-shadow: 0 0 0 2px #2f8cff inset; transform: translateY(-1px);"
     return base
+
+
+def obtener_registro_mesas() -> dict:
+    registro = {}
+    for nombre in MESAS_FIJAS:
+        registro[nombre] = {
+            "capacidad": MESAS_CAPACIDAD[nombre],
+            "zona": MESAS_ZONA[nombre],
+            "estado": get_estado_mesa(nombre),
+        }
+
+    for nombre, datos in st.session_state.mesas_adicionales.items():
+        registro[nombre] = {
+            "capacidad": datos["capacidad"],
+            "zona": datos["zona"],
+            "estado": datos["estado"],
+        }
+
+    return registro
 
 
 def set_estado_mesa(nombre: str, estado: str) -> None:
@@ -155,7 +186,14 @@ def set_estado_mesa(nombre: str, estado: str) -> None:
             procesar_lista_espera_si_hay_mesa_disponible()
         return
 
-    st.session_state.mesas_extra[nombre] = estado
+    if nombre not in st.session_state.mesas_adicionales:
+        st.session_state.mesas_adicionales[nombre] = {
+            "capacidad": MESAS_CAPACIDAD.get(nombre, 2),
+            "zona": MESAS_ZONA.get(nombre, "Interior"),
+            "estado": "DISPONIBLE",
+        }
+
+    st.session_state.mesas_adicionales[nombre]["estado"] = estado
     if estado == "EN LIMPIEZA":
         st.session_state.limpieza_inicio_por_mesa[nombre] = st.session_state.reloj_sim
     elif estado == "DISPONIBLE":
@@ -170,17 +208,28 @@ def get_estado_mesa(nombre: str) -> str:
         if st.session_state.mesa_05 == "BLOQUEADA_C":
             return "RESERVADA CLUSTER"
         return st.session_state.mesa_05
-    return st.session_state.mesas_extra[nombre]
+    if nombre in st.session_state.mesas_adicionales:
+        return st.session_state.mesas_adicionales[nombre]["estado"]
+    return "DISPONIBLE"
 
 
 def get_capacidad_mesa(nombre: str) -> int:
-    return MESAS_CAPACIDAD[nombre]
+    if nombre in MESAS_CAPACIDAD:
+        return MESAS_CAPACIDAD[nombre]
+    return st.session_state.mesas_adicionales[nombre]["capacidad"]
 
 
-def asignar_mesa_por_capacidad(pax: int) -> str | None:
+def get_zona_mesa(nombre: str) -> str:
+    if nombre in MESAS_ZONA:
+        return MESAS_ZONA[nombre]
+    return st.session_state.mesas_adicionales[nombre]["zona"]
+
+
+def asignar_mesa_por_capacidad(pax: int, zona_preferida: str) -> str | None:
     candidatas = []
-    for nombre, capacidad in MESAS_CAPACIDAD.items():
-        if capacidad >= pax and get_estado_mesa(nombre) == "DISPONIBLE":
+    for nombre, datos in obtener_registro_mesas().items():
+        capacidad = datos["capacidad"]
+        if capacidad >= pax and datos["estado"] == "DISPONIBLE" and datos["zona"] == zona_preferida:
             candidatas.append((capacidad, nombre))
 
     if not candidatas:
@@ -211,10 +260,11 @@ def tiempo_proyeccion_mesa(nombre: str) -> int | None:
     return None
 
 
-def sugerir_mesa_para_pax(pax: int) -> tuple[str, int] | None:
+def sugerir_mesa_para_pax(pax: int, zona_preferida: str) -> tuple[str, int] | None:
     candidatos: list[tuple[int, int, str]] = []
-    for nombre, capacidad in MESAS_CAPACIDAD.items():
-        if capacidad >= pax:
+    for nombre, datos in obtener_registro_mesas().items():
+        capacidad = datos["capacidad"]
+        if capacidad >= pax and datos["zona"] == zona_preferida:
             tiempo = tiempo_proyeccion_mesa(nombre)
             if tiempo is not None:
                 candidatos.append((tiempo, capacidad, nombre))
@@ -227,22 +277,23 @@ def sugerir_mesa_para_pax(pax: int) -> tuple[str, int] | None:
     return mejor[2], mejor[0]
 
 
-def mesa_disponible_para_pax(pax: int) -> str | None:
-    sugerida = sugerir_mesa_para_pax(pax)
+def mesa_disponible_para_pax(pax: int, zona_preferida: str) -> str | None:
+    sugerida = sugerir_mesa_para_pax(pax, zona_preferida)
     if sugerida is None:
         return None
     nombre_mesa, tiempo = sugerida
     return nombre_mesa if tiempo == 0 else None
 
 
-def agregar_a_lista_espera(reserva_nombre: str, pax: int) -> None:
-    sugerencia = sugerir_mesa_para_pax(pax)
+def agregar_a_lista_espera(reserva_nombre: str, pax: int, zona_preferida: str) -> None:
+    sugerencia = sugerir_mesa_para_pax(pax, zona_preferida)
     mesa_sugerida = sugerencia[0] if sugerencia else None
     espera_segundos = sugerencia[1] if sugerencia else None
     st.session_state.lista_espera_e1.append(
         {
             "reserva": reserva_nombre,
             "pax": pax,
+            "zona": zona_preferida,
             "mesa_sugerida": mesa_sugerida,
             "espera_segundos": espera_segundos,
         }
@@ -251,7 +302,7 @@ def agregar_a_lista_espera(reserva_nombre: str, pax: int) -> None:
 
 def intentar_asignar_desde_espera() -> bool:
     for indice, entrada in enumerate(st.session_state.lista_espera_e1):
-        mesa = mesa_disponible_para_pax(entrada["pax"])
+        mesa = mesa_disponible_para_pax(entrada["pax"], entrada["zona"])
         if mesa is None:
             continue
 
@@ -312,6 +363,7 @@ def cargar_siguiente_reserva() -> None:
     siguiente = st.session_state.reservas_pendientes.pop(0)
     st.session_state.reserva_activa = siguiente["nombre"]
     st.session_state.reserva_pax = siguiente["pax"]
+    st.session_state.reserva_zona = siguiente["zona"]
     st.session_state.mesa_reservada = None
     st.session_state.reserva_A = "CONFIRMA"
     st.session_state.reserva_inicio = None
@@ -353,6 +405,29 @@ with st.sidebar:
         "Simular reserva futura en Mesa 12 (colision)", value=True
     )
 
+    st.markdown("### Agregar mesas")
+    nueva_mesa_nombre = st.text_input("Nombre de la mesa", value=st.session_state.nueva_mesa_nombre)
+    nueva_mesa_capacidad = st.number_input(
+        "Capacidad", min_value=1, max_value=12, value=st.session_state.nueva_mesa_capacidad, step=1
+    )
+    nueva_mesa_zona = st.selectbox(
+        "Zona", options=["Interior", "Terraza"], index=0 if st.session_state.nueva_mesa_zona == "Interior" else 1
+    )
+    if st.button("Agregar mesa nueva"):
+        if nueva_mesa_nombre in MESAS_FIJAS or nueva_mesa_nombre in st.session_state.mesas_adicionales:
+            st.warning("Ya existe una mesa con ese nombre.")
+        else:
+            st.session_state.mesas_adicionales[nueva_mesa_nombre] = {
+                "capacidad": int(nueva_mesa_capacidad),
+                "zona": nueva_mesa_zona,
+                "estado": "DISPONIBLE",
+            }
+            st.session_state.limpieza_inicio_por_mesa[nueva_mesa_nombre] = None
+            st.session_state.nueva_mesa_nombre = f"Mesa {int(nueva_mesa_capacidad) + len(st.session_state.mesas_adicionales):02d}"
+            st.session_state.nueva_mesa_capacidad = int(nueva_mesa_capacidad)
+            st.session_state.nueva_mesa_zona = nueva_mesa_zona
+            st.rerun()
+
     st.markdown("### Reservas")
     if st.button("Agregar reserva pendiente"):
         nueva = crear_reserva_pendiente(st.session_state.next_reserva_idx)
@@ -362,10 +437,11 @@ with st.sidebar:
 
     st.write(f"Reserva activa: **{st.session_state.reserva_activa}**")
     st.write(f"Personas de la reserva activa: **{st.session_state.reserva_pax}**")
+    st.write(f"Zona solicitada: **{st.session_state.reserva_zona}**")
     st.write(f"Mesa reservada: **{st.session_state.mesa_reservada or '-'}**")
     st.write(f"Pendientes: **{len(st.session_state.reservas_pendientes)}**")
     if st.session_state.reservas_pendientes:
-        pendientes = [f'{reserva["nombre"]} ({reserva["pax"]} pers.)' for reserva in st.session_state.reservas_pendientes]
+        pendientes = [f'{reserva["nombre"]} ({reserva["pax"]} pers., {reserva["zona"]})' for reserva in st.session_state.reservas_pendientes]
         st.caption(" | ".join(pendientes))
 
     if st.button(
@@ -451,26 +527,31 @@ with tab_recepcionista:
     l4.warning("Reservada / Cluster")
 
     st.markdown("**Todas las mesas del salon**")
-
-    estado_m05 = "RESERVADA CLUSTER" if st.session_state.mesa_05 == "BLOQUEADA_C" else st.session_state.mesa_05
-    mesas_mapa = [
-        (tag_m12, 6, st.session_state.mesa_12),
-        (tag_m05, 2, estado_m05),
-        ("Mesa 01", 4, st.session_state.mesas_extra["Mesa 01"]),
-        ("Mesa 02", 4, st.session_state.mesas_extra["Mesa 02"]),
-        ("Mesa 03", 2, st.session_state.mesas_extra["Mesa 03"]),
-        ("Mesa 04", 2, st.session_state.mesas_extra["Mesa 04"]),
+    registro_mesas = obtener_registro_mesas()
+    mesas_interior = [
+        (nombre, datos["capacidad"], datos["estado"])
+        for nombre, datos in registro_mesas.items()
+        if datos["zona"] == "Interior"
+    ]
+    mesas_terraza = [
+        (nombre, datos["capacidad"], datos["estado"])
+        for nombre, datos in registro_mesas.items()
+        if datos["zona"] == "Terraza"
     ]
 
-    row1 = st.columns(3)
-    for idx, mesa in enumerate(mesas_mapa[:3]):
-        with row1[idx]:
-            render_mesa_card(mesa[0], mesa[1], mesa[2])
+    st.markdown("### Interior")
+    for fila in range(0, len(mesas_interior), 3):
+        columnas = st.columns(3)
+        for idx, mesa in enumerate(mesas_interior[fila:fila + 3]):
+            with columnas[idx]:
+                render_mesa_card(mesa[0], mesa[1], mesa[2])
 
-    row2 = st.columns(3)
-    for idx, mesa in enumerate(mesas_mapa[3:]):
-        with row2[idx]:
-            render_mesa_card(mesa[0], mesa[1], mesa[2])
+    st.markdown("### Terraza")
+    for fila in range(0, len(mesas_terraza), 3):
+        columnas = st.columns(3)
+        for idx, mesa in enumerate(mesas_terraza[fila:fila + 3]):
+            with columnas[idx]:
+                render_mesa_card(mesa[0], mesa[1], mesa[2])
 
     st.markdown("---")
     st.write(f"**Estado {reserva_label}:** `{st.session_state.reserva_A}`")
@@ -483,7 +564,7 @@ with tab_recepcionista:
         for entrada in st.session_state.lista_espera_e1:
             espera_txt = f"{entrada['espera_segundos']} s" if entrada["espera_segundos"] is not None else "sin proyeccion exacta"
             st.write(
-                f"- {entrada['reserva']} ({entrada['pax']} pers.) -> {entrada['mesa_sugerida'] or 'sin mesa sugerida'} | espera estimada: {espera_txt}"
+                f"- {entrada['reserva']} ({entrada['pax']} pers., {entrada['zona']}) -> {entrada['mesa_sugerida'] or 'sin mesa sugerida'} | espera estimada: {espera_txt}"
             )
 
     if st.session_state.reserva_A == "RESERVADA" and st.session_state.no_show_deadline is not None:
@@ -497,14 +578,14 @@ with tab_recepcionista:
 
     if st.session_state.reserva_A == "CONFIRMA":
         st.info("Paso 1-4: se registra reserva y se asigna bloque en estado RESERVADA.")
-        st.caption(f"{reserva_label} es para {st.session_state.reserva_pax} personas.")
+        st.caption(f"{reserva_label} es para {st.session_state.reserva_pax} personas y pide zona {st.session_state.reserva_zona}.")
         if st.button(f"Registrar {reserva_label} (asignar bloque)"):
-            mesa_asignada = asignar_mesa_por_capacidad(st.session_state.reserva_pax)
+            mesa_asignada = asignar_mesa_por_capacidad(st.session_state.reserva_pax, st.session_state.reserva_zona)
             if mesa_asignada is None:
-                agregar_a_lista_espera(reserva_label, st.session_state.reserva_pax)
+                agregar_a_lista_espera(reserva_label, st.session_state.reserva_pax, st.session_state.reserva_zona)
                 st.session_state.reserva_A = "E1: Protocolo de Espera"
                 st.session_state.mesa_reservada = None
-                st.warning("No hay mesa disponible con capacidad suficiente. La reserva pasó a lista de espera E1.")
+                st.warning("No hay mesa disponible con capacidad y zona suficientes. La reserva pasó a lista de espera E1.")
                 st.rerun()
             else:
                 st.session_state.mesa_reservada = mesa_asignada
@@ -521,9 +602,11 @@ with tab_recepcionista:
         if st.session_state.lista_espera_e1:
             entrada = next((item for item in st.session_state.lista_espera_e1 if item["reserva"] == reserva_label), None)
             if entrada:
-                st.caption(
-                    f"Sugerencia: {entrada['mesa_sugerida'] or 'sin sugerencia'} | espera estimada: "
+                espera_txt = (
                     f"{entrada['espera_segundos']} s" if entrada["espera_segundos"] is not None else "sin proyeccion exacta"
+                )
+                st.caption(
+                    f"Sugerencia: {entrada['mesa_sugerida'] or 'sin sugerencia'} | zona: {entrada['zona']} | espera estimada: {espera_txt}"
                 )
         st.caption("Usa 'Revisar lista de espera E1' en el sidebar cuando haya una mesa disponible.")
 
@@ -569,7 +652,7 @@ with tab_garzon:
     st.header("Garzon (Tablet)")
 
     st.markdown("### Seleccion visual de mesa")
-    mesas_control = ["Mesa 12", "Mesa 05", *st.session_state.mesas_extra.keys()]
+    mesas_control = list(obtener_registro_mesas().keys())
 
     s_row1 = st.columns(3)
     for idx, mesa_nombre in enumerate(mesas_control[:3]):
