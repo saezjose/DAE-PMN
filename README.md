@@ -82,7 +82,10 @@ La interfaz se desplegara de forma automatica en su navegador web predeterminado
 * ** Registro de Arribo: ** En la pestaña Recepcionista, presione el boton Registrar Reserva A (asignar bloque). Al no detectar colision inicial directa, la reserva pasa a estado RESERVADA.
 * ** Provocar la Colision: ** En la barra lateral, avance el tiempo presionando los botones de adicion horaria hasta superar el tiempo estimado. Al presionar Marcar llegada de Reserva A (Check-in), el sistema detectara que la Mesa 12 sigue ocupada por sobre-estadia. La reserva cambiara automaticamente al estado Check-in: Esperando Mesa.
 
-* ** Activacion de Contingencia: ** Presione el boton Crear Cluster Logico (Mesa 12 + Mesa 05). Verifique que:
+* **Activacion de Contingencia:** Presione el boton Crear Cluster Logico (Mesa 12 + Mesa 05). Verifique que:
+  1. El panel superior activa de forma inmediata la perdida de $5000 CLP con el indicador delta en rojo.
+  2. El mapa visual muta las etiquetas de ambas mesas a [Cluster Alfa].
+  3. La Mesa 05 cambia su estado de forma automatica a RESERVADA CLUSTER (Bloqueo de seguridad).
 * **  **
 * **  **
 * **  **
