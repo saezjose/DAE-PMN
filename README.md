@@ -74,4 +74,16 @@ Descargue el archivo de codigo fuente PMN.py en su directorio local, navegue hac
 ```bash
 python -m streamlit run PMN.py
 ```
+La interfaz se desplegara de forma automatica en su navegador web predeterminado en la direccion local http://localhost:8501.
 
+## 6. Guia de Trazabilidad del Recorrido Principal 
+
+* ** Estado Inicial: ** Verifique que el panel financiero inicia en $0 CLP, la Mesa 12 figura como OCUPADA (Interior) y la Mesa 05 como DISPONIBLE.
+* ** Registro de Arribo: ** En la pestaña Recepcionista, presione el boton Registrar Reserva A (asignar bloque). Al no detectar colision inicial directa, la reserva pasa a estado RESERVADA.
+* ** Provocar la Colision: ** En la barra lateral, avance el tiempo presionando los botones de adicion horaria hasta superar el tiempo estimado. Al presionar Marcar llegada de Reserva A (Check-in), el sistema detectara que la Mesa 12 sigue ocupada por sobre-estadia. La reserva cambiara automaticamente al estado Check-in: Esperando Mesa.
+
+* ** Activacion de Contingencia: ** Presione el boton Crear Cluster Logico (Mesa 12 + Mesa 05). Verifique que:
+* **  **
+* **  **
+* **  **
+* **  **
