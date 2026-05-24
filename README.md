@@ -78,15 +78,17 @@ La interfaz se desplegara de forma automatica en su navegador web predeterminado
 
 ## 6. Guia de Trazabilidad del Recorrido Principal 
 
-* ** Estado Inicial: ** Verifique que el panel financiero inicia en $0 CLP, la Mesa 12 figura como OCUPADA (Interior) y la Mesa 05 como DISPONIBLE.
-* ** Registro de Arribo: ** En la pestaña Recepcionista, presione el boton Registrar Reserva A (asignar bloque). Al no detectar colision inicial directa, la reserva pasa a estado RESERVADA.
-* ** Provocar la Colision: ** En la barra lateral, avance el tiempo presionando los botones de adicion horaria hasta superar el tiempo estimado. Al presionar Marcar llegada de Reserva A (Check-in), el sistema detectara que la Mesa 12 sigue ocupada por sobre-estadia. La reserva cambiara automaticamente al estado Check-in: Esperando Mesa.
+* **Estado Inicial:** Verifique que el panel financiero inicia en $0 CLP, la Mesa 12 figura como OCUPADA (Interior) y la Mesa 05 como DISPONIBLE.
+* **Registro de Arribo:** En la pestaña Recepcionista, presione el boton Registrar Reserva A (asignar bloque). Al no detectar colision inicial directa, la reserva pasa a estado RESERVADA.
+* **Provocar la Colision:** En la barra lateral, avance el tiempo presionando los botones de adicion horaria hasta superar el tiempo estimado. Al presionar Marcar llegada de Reserva A (Check-in), el sistema detectara que la Mesa 12 sigue ocupada por sobre-estadia. La reserva cambiara automaticamente al estado Check-in: Esperando Mesa.
 
 * **Activacion de Contingencia:** Presione el boton Crear Cluster Logico (Mesa 12 + Mesa 05). Verifique que:
   1. El panel superior activa de forma inmediata la perdida de $5000 CLP con el indicador delta en rojo.
   2. El mapa visual muta las etiquetas de ambas mesas a [Cluster Alfa].
   3. La Mesa 05 cambia su estado de forma automatica a RESERVADA CLUSTER (Bloqueo de seguridad).
-* **  **
-* **  **
-* **  **
-* **  **
+
+* **Accion de Garzon (Liberacion):** Cambie a la pestaña Garzon. Vera la alerta de prioridad alta activa. Seleccione la Mesa 12 y presione Registrar salida de comensales (Checkout). La mesa pasara a EN LIMPIEZA con un contador regresivo de 180 segundos indexado al reloj simulado.
+  
+* **Superar el Bloqueo de Limpieza:** Si intenta presionar Mesa lista de inmediato, la aplicacion bloqueara pasivamente la accion por resguardo del Poka-yoke. Vaya a la barra lateral, presione el boton +15 min para simular el paso real del tiempo fisico e higienizacion. Vuelva a la tablet del garzon y presione Mesa lista para Mesa 12.
+  
+* **Cierre de Flujo:** El sistema procesara la transaccion de forma exitosa, consolidara la entrada de los nuevos clientes, limpiara el mapa del salon y desplegara el mensaje de exito confirmando que la Reserva A ha sido correctamente sentada en su cluster.
