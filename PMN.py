@@ -253,6 +253,102 @@ def render_login() -> None:
                         st.rerun()
 
 
+def aplicar_tema_visual() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+            --pmn-bg: #0d1117;
+            --pmn-ink: #e5e7eb;
+            --pmn-muted: #9ca3af;
+            --pmn-border: #2a3441;
+            --pmn-accent: #7aa2ff;
+            --pmn-ok: #58d68d;
+            --pmn-warn: #f7c873;
+            --pmn-bad: #ff8fa3;
+        }
+
+        [data-testid="stAppViewContainer"] {
+            background:
+                radial-gradient(circle at 10% 0%, #1a2230, transparent 35%),
+                radial-gradient(circle at 90% 15%, #16202f, transparent 25%),
+                var(--pmn-bg);
+            color: var(--pmn-ink);
+        }
+
+        [data-testid="stHeader"] {
+            background: transparent;
+        }
+
+        h1, h2, h3 {
+            font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+            letter-spacing: 0.2px;
+        }
+
+        p, li, div, label, span {
+            font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        }
+
+        [data-testid="stMetric"] {
+            background: #121923;
+            border: 1px solid var(--pmn-border);
+            border-radius: 14px;
+            padding: 0.6rem 0.9rem;
+        }
+
+        .pmn-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .pmn-chip {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 0.28rem 0.72rem;
+            font-size: 0.78rem;
+            font-weight: 700;
+            border: 1px solid var(--pmn-border);
+            background: #121923;
+            color: var(--pmn-muted);
+        }
+
+        .pmn-chip.ok { color: var(--pmn-ok); border-color: #9fd8b7; }
+        .pmn-chip.warn { color: var(--pmn-warn); border-color: #e6d19d; }
+        .pmn-chip.bad { color: var(--pmn-bad); border-color: #e8a3ba; }
+        .pmn-chip.accent { color: var(--pmn-accent); border-color: #a9bde5; }
+
+        .pmn-card {
+            border: 1px solid var(--pmn-border);
+            border-radius: 14px;
+            padding: 0.75rem 0.8rem;
+            background: #121923;
+            margin-bottom: 0.55rem;
+        }
+
+        .pmn-card h4 {
+            margin: 0;
+            font-size: 1.02rem;
+            line-height: 1.2;
+        }
+
+        .pmn-card p {
+            margin: 0.25rem 0 0;
+            font-size: 0.9rem;
+            color: var(--pmn-muted);
+        }
+
+        .pmn-card.disponible { border-left: 8px solid #1d6b45; }
+        .pmn-card.ocupada { border-left: 8px solid #9f1239; }
+        .pmn-card.limpieza { border-left: 8px solid #8a5b09; }
+        .pmn-card.reservada { border-left: 8px solid #1f4b99; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def fmt_dt(value: datetime | None) -> str:
     if value is None:
         return "-"
@@ -293,13 +389,24 @@ def estado_flujo_actual() -> str:
 
 def render_mesa_card(nombre: str, capacidad: int, estado: str) -> None:
     zona = MESAS_ZONA.get(nombre, "Interior")
-    etiqueta = f"**{nombre}** (Cap. {capacidad})\n\nZona: {zona}\n\nEstado: {estado}"
-    if estado == "OCUPADA":
-        st.error(etiqueta)
-    elif estado in {"EN LIMPIEZA", "BLOQUEADA_C", "RESERVADA"}:
-        st.warning(etiqueta)
-    else:
-        st.success(etiqueta)
+    clase_estado = {
+        "OCUPADA": "ocupada",
+        "EN LIMPIEZA": "limpieza",
+        "BLOQUEADA_C": "reservada",
+        "RESERVADA": "reservada",
+        "DISPONIBLE": "disponible",
+    }.get(estado, "disponible")
+
+    st.markdown(
+        f"""
+        <div class="pmn-card {clase_estado}">
+            <h4>{nombre} · Cap. {capacidad}</h4>
+            <p>Zona: {zona}</p>
+            <p>Estado: <strong>{estado}</strong></p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def card_style_for_estado(estado: str, selected: bool = False) -> str:
@@ -573,18 +680,17 @@ if not esta_autenticado():
     render_login()
     st.stop()
 
-st.title("PMN - Prototipo Navegable de Gestion de Reservas (INFO1163)")
-st.caption(
-    "Simulacion academica: flujo navegable sin BD, con reglas de no-show, colision y limpieza controlada."
-)
-
 header_left, header_right = st.columns([5, 1])
+
+aplicar_tema_visual()
+rol_actual = st.session_state.auth_rol
+
 with header_right:
     if st.button("Cerrar Sesion", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-
-rol_actual = st.session_state.auth_rol
+with header_left:
+    st.title(f"Vista general {rol_actual}")
 
 with st.sidebar:
     st.markdown("### Control de Simulacion")

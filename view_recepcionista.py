@@ -13,8 +13,27 @@ def render_recepcionista_view(
     set_estado_mesa,
     get_estado_mesa,
 ) -> None:
-    st.header("Recepcionista (Mapa Visual)")
-    st.subheader("Mapa Visual del Salon")
+    st.header("Mapa Visual")
+    st.caption("Panel operativo de reservas, estados y asignacion de mesas.")
+
+    registro_mesas = obtener_registro_mesas()
+    total_mesas = len(registro_mesas)
+    disponibles = sum(1 for datos in registro_mesas.values() if datos["estado"] == "DISPONIBLE")
+    ocupadas = sum(1 for datos in registro_mesas.values() if datos["estado"] == "OCUPADA")
+    limpieza = sum(1 for datos in registro_mesas.values() if datos["estado"] == "EN LIMPIEZA")
+
+    st.markdown(
+        f"""
+        <div class="pmn-chip-row">
+            <span class="pmn-chip accent">Mesas Totales: {total_mesas}</span>
+            <span class="pmn-chip ok">Disponibles: {disponibles}</span>
+            <span class="pmn-chip bad">Ocupadas: {ocupadas}</span>
+            <span class="pmn-chip warn">En Limpieza: {limpieza}</span>
+            <span class="pmn-chip">Reservas en Espera: {len(st.session_state.lista_espera_e1)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     tiempo_restante = "-"
     if st.session_state.reserva_A == "SENTADA" and st.session_state.checkin_time is not None:
@@ -31,15 +50,20 @@ def render_recepcionista_view(
 
     st.info(f"Estado del flujo actual: {estado_flujo_actual()}")
 
-    st.markdown("**Leyenda visual**")
-    l1, l2, l3, l4 = st.columns(4)
-    l1.success("Disponible")
-    l2.error("Ocupada")
-    l3.warning("En limpieza")
-    l4.warning("Reservada / Cluster")
+    st.markdown("### Leyenda visual")
+    st.markdown(
+        """
+        <div class="pmn-chip-row">
+            <span class="pmn-chip ok">Disponible</span>
+            <span class="pmn-chip bad">Ocupada</span>
+            <span class="pmn-chip warn">En limpieza</span>
+            <span class="pmn-chip accent">Reservada / Cluster</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown("**Todas las mesas del salon**")
-    registro_mesas = obtener_registro_mesas()
+    st.markdown("### Mapa visual del salon")
     mesas_interior = [
         (nombre, datos["capacidad"], datos["estado"])
         for nombre, datos in registro_mesas.items()
@@ -51,14 +75,14 @@ def render_recepcionista_view(
         if datos["zona"] == "Terraza"
     ]
 
-    st.markdown("### Interior")
+    st.markdown("#### Interior")
     for fila in range(0, len(mesas_interior), 3):
         columnas = st.columns(3)
         for idx, mesa in enumerate(mesas_interior[fila:fila + 3]):
             with columnas[idx]:
                 render_mesa_card(mesa[0], mesa[1], mesa[2])
 
-    st.markdown("### Terraza")
+    st.markdown("#### Terraza")
     for fila in range(0, len(mesas_terraza), 3):
         columnas = st.columns(3)
         for idx, mesa in enumerate(mesas_terraza[fila:fila + 3]):

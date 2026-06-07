@@ -9,9 +9,8 @@ def render_garzon_view(
     get_limpieza_restante,
     set_estado_mesa,
 ) -> None:
-    st.header("Garzon (Tablet)")
-
     st.markdown("### Seleccion visual de mesa")
+    st.caption("Control de salon en tiempo real con acciones rapidas por mesa.")
     mesas_control = list(obtener_registro_mesas().keys())
 
     s_row1 = st.columns(3)
@@ -25,17 +24,39 @@ def render_garzon_view(
             render_selectable_mesa(mesa_nombre)
 
     mesa_objetivo = st.session_state.mesa_objetivo_garzon
-    st.info(f"Mesa seleccionada: {mesa_objetivo}")
+    estado_seleccionado = get_estado_mesa(mesa_objetivo)
+    restante_limpieza = get_limpieza_restante(mesa_objetivo)
+
+    chip_estado = "ok" if estado_seleccionado == "DISPONIBLE" else "bad" if estado_seleccionado == "OCUPADA" else "warn"
+    st.markdown(
+        f"""
+        <div class="pmn-chip-row">
+            <span class="pmn-chip accent">Mesa Seleccionada: {mesa_objetivo}</span>
+            <span class="pmn-chip {chip_estado}">Estado: {estado_seleccionado}</span>
+            <span class="pmn-chip">Limpieza Restante: {restante_limpieza} s</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("### Control directo de mesas")
     st.caption("Checkout = se retira el cliente y la mesa pasa a limpieza. Mesa lista = termino la limpieza y se habilita la mesa.")
-    estado_seleccionado = get_estado_mesa(mesa_objetivo)
-    restante_limpieza = get_limpieza_restante(mesa_objetivo)
     puede_disponible = estado_seleccionado == "EN LIMPIEZA" and restante_limpieza == 0
 
-    if st.button("Marcar MESA LISTA / DISPONIBLE", disabled=not puede_disponible):
-        set_estado_mesa(mesa_objetivo, "DISPONIBLE")
-        st.rerun()
+    a1, a2 = st.columns(2)
+    with a1:
+        if st.button("Marcar MESA LISTA / DISPONIBLE", disabled=not puede_disponible, use_container_width=True, type="primary"):
+            set_estado_mesa(mesa_objetivo, "DISPONIBLE")
+            st.rerun()
+    with a2:
+        can_checkout = estado_seleccionado == "OCUPADA"
+        if st.button(
+            f"Registrar salida (Checkout) de {mesa_objetivo}",
+            disabled=not can_checkout,
+            use_container_width=True,
+        ):
+            set_estado_mesa(mesa_objetivo, "EN LIMPIEZA")
+            st.rerun()
 
     if estado_seleccionado == "EN LIMPIEZA" and restante_limpieza > 0:
         st.caption(f"Bloqueo activo: faltan {restante_limpieza} s para poder marcarla disponible.")
@@ -87,14 +108,6 @@ def render_garzon_view(
                 st.rerun()
         else:
             st.success("Mitigacion completada. Listo para registrar salida.")
-
-    can_checkout = estado_seleccionado == "OCUPADA"
-    if st.button(
-        f"Registrar salida de comensales (Checkout) de {mesa_objetivo}",
-        disabled=not can_checkout,
-    ):
-        set_estado_mesa(mesa_objetivo, "EN LIMPIEZA")
-        st.rerun()
 
     if get_estado_mesa(mesa_objetivo) == "EN LIMPIEZA":
         st.write(f"Accion: Higienizando {mesa_objetivo} (bloqueo real de 3 minutos).")
