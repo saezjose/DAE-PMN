@@ -110,6 +110,25 @@ def validar_identidad(correo: str, password_ingresada: str):
         # SOLUCIÓN PUNTO 1: Garantiza el cierre del archivo descriptor pase lo que pase
         conn.close()
 
+
+def obtener_usuario_por_correo(correo: str):
+    """Devuelve nombre y rol para un correo existente."""
+    correo_limpio = correo.strip().lower()
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT nombre_trabajador, rol
+            FROM usuarios
+            WHERE correo_corporativo = ?
+            """,
+            (correo_limpio,),
+        )
+        return cursor.fetchone()
+    finally:
+        conn.close()
+
 def obtener_registro_mesas_db():
     """Recupera el diccionario de estados desde el disco. Protegido contra fuga de memoria."""
     conn = obtener_conexion()

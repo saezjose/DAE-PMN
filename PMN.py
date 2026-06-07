@@ -2,12 +2,19 @@
 ## python -m streamlit run PMN.py
 
 from datetime import datetime, timedelta
+import hashlib
+import hmac
 import random
+import time
 
 import streamlit as st
-from database import inicializar_base_de_datos, validar_identidad
+from database import inicializar_base_de_datos, validar_identidad, obtener_usuario_por_correo
 from view_recepcionista import render_recepcionista_view
 from view_garzon import render_garzon_view
+
+
+AUTH_TOKEN_SECRET = "pmn-auth-secret-v1"
+AUTH_TOKEN_TTL_SECONDS = 8 * 60 * 60
 
 
 MESAS_CAPACIDAD = {
@@ -97,6 +104,7 @@ def marcar_sesion_autenticada(correo: str, nombre: str, rol: str) -> None:
     st.session_state.auth_nombre = nombre
     st.session_state.auth_rol = rol
     st.session_state.auth_login_at = datetime.now().isoformat(timespec="seconds")
+    guardar_token_auth_url(correo, rol)
 
 
 def esta_autenticado() -> bool:
@@ -132,6 +140,76 @@ def cerrar_sesion() -> None:
     st.session_state.auth_nombre = ""
     st.session_state.auth_rol = ""
     st.session_state.auth_login_at = None
+    limpiar_token_auth_url()
+
+
+def crear_firma_token(correo: str, rol: str, issued_at: int) -> str:
+    mensaje = f"{correo}|{rol}|{issued_at}".encode("utf-8")
+    return hmac.new(AUTH_TOKEN_SECRET.encode("utf-8"), mensaje, hashlib.sha256).hexdigest()
+
+
+def guardar_token_auth_url(correo: str, rol: str) -> None:
+    issued_at = int(time.time())
+    firma = crear_firma_token(correo, rol, issued_at)
+    st.query_params.update(
+        {
+            "auth_correo": correo,
+            "auth_rol": rol,
+            "auth_iat": str(issued_at),
+            "auth_sig": firma,
+        }
+    )
+
+
+def limpiar_token_auth_url() -> None:
+    for key in ["auth_correo", "auth_rol", "auth_iat", "auth_sig"]:
+        if key in st.query_params:
+            del st.query_params[key]
+
+
+def restaurar_sesion_desde_url() -> None:
+    if esta_autenticado():
+        return
+
+    correo = st.query_params.get("auth_correo", "")
+    rol = st.query_params.get("auth_rol", "")
+    issued_at_txt = st.query_params.get("auth_iat", "")
+    firma = st.query_params.get("auth_sig", "")
+
+    if not correo or not rol or not issued_at_txt or not firma:
+        return
+
+    try:
+        issued_at = int(issued_at_txt)
+    except ValueError:
+        limpiar_token_auth_url()
+        return
+
+    ahora = int(time.time())
+    if ahora - issued_at > AUTH_TOKEN_TTL_SECONDS:
+        limpiar_token_auth_url()
+        return
+
+    firma_esperada = crear_firma_token(correo, rol, issued_at)
+    if not hmac.compare_digest(firma_esperada, firma):
+        limpiar_token_auth_url()
+        return
+
+    usuario = obtener_usuario_por_correo(correo)
+    if usuario is None:
+        limpiar_token_auth_url()
+        return
+
+    nombre_db, rol_db = usuario
+    if rol_db != rol:
+        limpiar_token_auth_url()
+        return
+
+    st.session_state.auth_ok = True
+    st.session_state.auth_correo = correo
+    st.session_state.auth_nombre = nombre_db
+    st.session_state.auth_rol = rol_db
+    st.session_state.auth_login_at = datetime.now().isoformat(timespec="seconds")
 
 
 def render_login() -> None:
@@ -489,6 +567,7 @@ def cargar_siguiente_reserva() -> None:
 st.set_page_config(layout="wide")
 init_state()
 ensure_db_ready()
+restaurar_sesion_desde_url()
 
 if not esta_autenticado():
     render_login()
@@ -499,15 +578,17 @@ st.caption(
     "Simulacion academica: flujo navegable sin BD, con reglas de no-show, colision y limpieza controlada."
 )
 
+header_left, header_right = st.columns([5, 1])
+with header_right:
+    if st.button("Cerrar Sesion", use_container_width=True):
+        cerrar_sesion()
+        st.rerun()
+
 rol_actual = st.session_state.auth_rol
 
 with st.sidebar:
     st.markdown("### Control de Simulacion")
     st.caption(f"Usuario: {st.session_state.auth_nombre} | Rol: {rol_actual}")
-
-    if st.button("Cerrar Sesion", use_container_width=True):
-        cerrar_sesion()
-        st.rerun()
 
     st.write(f"Hora simulada: **{fmt_dt(st.session_state.reloj_sim)}**")
 
