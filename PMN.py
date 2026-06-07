@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 import random
 
 import streamlit as st
+from database import inicializar_base_de_datos, validar_identidad
+from view_recepcionista import render_recepcionista_view
+from view_garzon import render_garzon_view
 
 
 MESAS_CAPACIDAD = {
@@ -67,11 +70,109 @@ def init_state() -> None:
         "nueva_mesa_nombre": "Mesa 07",
         "nueva_mesa_capacidad": 2,
         "nueva_mesa_zona": "Interior",
+        "db_ready": False,
+        "auth_ok": False,
+        "auth_correo": "",
+        "auth_nombre": "",
+        "auth_rol": "",
+        "auth_login_at": None,
     }
 
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+
+def ensure_db_ready() -> None:
+    if st.session_state.db_ready:
+        return
+
+    inicializar_base_de_datos()
+    st.session_state.db_ready = True
+
+
+def marcar_sesion_autenticada(correo: str, nombre: str, rol: str) -> None:
+    st.session_state.auth_ok = True
+    st.session_state.auth_correo = correo
+    st.session_state.auth_nombre = nombre
+    st.session_state.auth_rol = rol
+    st.session_state.auth_login_at = datetime.now().isoformat(timespec="seconds")
+
+
+def esta_autenticado() -> bool:
+    return bool(
+        st.session_state.get("auth_ok")
+        and st.session_state.get("auth_correo")
+        and st.session_state.get("auth_rol")
+    )
+
+
+def resetear_simulacion_preservando_auth() -> None:
+    claves_auth = {
+        "db_ready",
+        "auth_ok",
+        "auth_correo",
+        "auth_nombre",
+        "auth_rol",
+        "auth_login_at",
+    }
+    snapshot_auth = {k: st.session_state.get(k) for k in claves_auth}
+
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+
+    init_state()
+    for key, value in snapshot_auth.items():
+        st.session_state[key] = value
+
+
+def cerrar_sesion() -> None:
+    st.session_state.auth_ok = False
+    st.session_state.auth_correo = ""
+    st.session_state.auth_nombre = ""
+    st.session_state.auth_rol = ""
+    st.session_state.auth_login_at = None
+
+
+def render_login() -> None:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] { display: none; }
+        [data-testid="stAppViewContainer"] {
+            background:
+                radial-gradient(circle at 15% 20%, rgba(83, 146, 255, 0.18), transparent 30%),
+                radial-gradient(circle at 85% 10%, rgba(255, 156, 79, 0.16), transparent 28%),
+                linear-gradient(145deg, #0f172a 0%, #0b1220 60%, #0f1a2f 100%);
+        }
+        [data-testid="stHeader"] { background: transparent; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_left, col_center, col_right = st.columns([1, 1.25, 1])
+    with col_center:
+        st.markdown("## Acceso PMN")
+        st.caption("Ingresa con tu correo corporativo y contrasena para usar el sistema.")
+
+        with st.form("form_login", clear_on_submit=False):
+            correo = st.text_input("Correo electronico", placeholder="usuario@restaurante.cl")
+            password = st.text_input("Contrasena", type="password")
+            submit_login = st.form_submit_button("Iniciar sesion", use_container_width=True)
+
+            if submit_login:
+                correo_limpio = correo.strip().lower()
+                if not correo_limpio or not password.strip():
+                    st.error("Completa correo y contrasena para continuar.")
+                else:
+                    registro = validar_identidad(correo_limpio, password)
+                    if registro is None:
+                        st.error("Credenciales invalidas. Verifica tus datos.")
+                    else:
+                        nombre, rol = registro
+                        marcar_sesion_autenticada(correo_limpio, nombre, rol)
+                        st.rerun()
 
 
 def fmt_dt(value: datetime | None) -> str:
@@ -387,14 +488,27 @@ def cargar_siguiente_reserva() -> None:
 
 st.set_page_config(layout="wide")
 init_state()
+ensure_db_ready()
+
+if not esta_autenticado():
+    render_login()
+    st.stop()
 
 st.title("PMN - Prototipo Navegable de Gestion de Reservas (INFO1163)")
 st.caption(
     "Simulacion academica: flujo navegable sin BD, con reglas de no-show, colision y limpieza controlada."
 )
 
+rol_actual = st.session_state.auth_rol
+
 with st.sidebar:
     st.markdown("### Control de Simulacion")
+    st.caption(f"Usuario: {st.session_state.auth_nombre} | Rol: {rol_actual}")
+
+    if st.button("Cerrar Sesion", use_container_width=True):
+        cerrar_sesion()
+        st.rerun()
+
     st.write(f"Hora simulada: **{fmt_dt(st.session_state.reloj_sim)}**")
 
     c1, c2 = st.columns(2)
@@ -411,70 +525,72 @@ with st.sidebar:
         "Simular reserva futura en Mesa 12 (colision)", value=True
     )
 
-    st.markdown("### Agregar mesas")
-    nueva_mesa_nombre = st.text_input("Nombre de la mesa", value=st.session_state.nueva_mesa_nombre)
-    nueva_mesa_capacidad = st.number_input(
-        "Capacidad", min_value=1, max_value=12, value=st.session_state.nueva_mesa_capacidad, step=1
-    )
-    nueva_mesa_zona = st.selectbox(
-        "Zona", options=["Interior", "Terraza"], index=0 if st.session_state.nueva_mesa_zona == "Interior" else 1
-    )
-    if st.button("Agregar mesa nueva"):
-        if nueva_mesa_nombre in MESAS_FIJAS or nueva_mesa_nombre in st.session_state.mesas_adicionales:
-            st.warning("Ya existe una mesa con ese nombre.")
-        else:
-            st.session_state.mesas_adicionales[nueva_mesa_nombre] = {
-                "capacidad": int(nueva_mesa_capacidad),
-                "zona": nueva_mesa_zona,
-                "estado": "DISPONIBLE",
-            }
-            st.session_state.limpieza_inicio_por_mesa[nueva_mesa_nombre] = None
-            st.session_state.nueva_mesa_nombre = f"Mesa {int(nueva_mesa_capacidad) + len(st.session_state.mesas_adicionales):02d}"
-            st.session_state.nueva_mesa_capacidad = int(nueva_mesa_capacidad)
-            st.session_state.nueva_mesa_zona = nueva_mesa_zona
+    if rol_actual == "recepcionista":
+        st.markdown("### Agregar mesas")
+        nueva_mesa_nombre = st.text_input("Nombre de la mesa", value=st.session_state.nueva_mesa_nombre)
+        nueva_mesa_capacidad = st.number_input(
+            "Capacidad", min_value=1, max_value=12, value=st.session_state.nueva_mesa_capacidad, step=1
+        )
+        nueva_mesa_zona = st.selectbox(
+            "Zona", options=["Interior", "Terraza"], index=0 if st.session_state.nueva_mesa_zona == "Interior" else 1
+        )
+        if st.button("Agregar mesa nueva"):
+            if nueva_mesa_nombre in MESAS_FIJAS or nueva_mesa_nombre in st.session_state.mesas_adicionales:
+                st.warning("Ya existe una mesa con ese nombre.")
+            else:
+                st.session_state.mesas_adicionales[nueva_mesa_nombre] = {
+                    "capacidad": int(nueva_mesa_capacidad),
+                    "zona": nueva_mesa_zona,
+                    "estado": "DISPONIBLE",
+                }
+                st.session_state.limpieza_inicio_por_mesa[nueva_mesa_nombre] = None
+                st.session_state.nueva_mesa_nombre = f"Mesa {int(nueva_mesa_capacidad) + len(st.session_state.mesas_adicionales):02d}"
+                st.session_state.nueva_mesa_capacidad = int(nueva_mesa_capacidad)
+                st.session_state.nueva_mesa_zona = nueva_mesa_zona
+                st.rerun()
+
+        st.markdown("### Ingreso Manual (Walk-in / Reserva)")
+        with st.form("form_ingreso"):
+            pax_ingreso = st.number_input("Cantidad de personas", min_value=1, max_value=12, value=2)
+            zona_ingreso = st.selectbox("Preferencia de Zona", ["Cualquiera", "Interior", "Terraza"])
+            tiempo_ingreso = st.number_input("Tiempo estimado (minutos)", min_value=30, max_value=180, value=90, step=15)
+            submit_ingreso = st.form_submit_button("Registrar Ingreso al Sistema")
+
+            if submit_ingreso:
+                nueva = {
+                    "nombre": nombre_reserva(st.session_state.next_reserva_idx),
+                    "pax": pax_ingreso,
+                    "zona": zona_ingreso,
+                    "tiempo": tiempo_ingreso
+                }
+                st.session_state.reservas_pendientes.append(nueva)
+                st.session_state.next_reserva_idx += 1
+                st.rerun()
+
+        st.write(f"Reserva activa: **{st.session_state.reserva_activa}**")
+        st.write(f"Personas de la reserva activa: **{st.session_state.reserva_pax}**")
+        st.write(f"Zona solicitada: **{st.session_state.reserva_zona}**")
+        st.write(f"Mesa reservada: **{st.session_state.mesa_reservada or '-'}**")
+        st.write(f"Pendientes: **{len(st.session_state.reservas_pendientes)}**")
+        if st.session_state.reservas_pendientes:
+            pendientes = [f'{reserva["nombre"]} ({reserva["pax"]} pers., {reserva["zona"]})' for reserva in st.session_state.reservas_pendientes]
+            st.caption(" | ".join(pendientes))
+
+        if st.button(
+            "Cargar siguiente reserva", disabled=not st.session_state.reservas_pendientes
+        ):
+            cargar_siguiente_reserva()
             st.rerun()
 
-    st.markdown("### Ingreso Manual (Walk-in / Reserva)")
-    with st.form("form_ingreso"):
-        pax_ingreso = st.number_input("Cantidad de personas", min_value=1, max_value=12, value=2)
-        zona_ingreso = st.selectbox("Preferencia de Zona", ["Cualquiera", "Interior", "Terraza"])
-        tiempo_ingreso = st.number_input("Tiempo estimado (minutos)", min_value=30, max_value=180, value=90, step=15)
-        submit_ingreso = st.form_submit_button("Registrar Ingreso al Sistema")
-
-        if submit_ingreso:
-            nueva = {
-                "nombre": nombre_reserva(st.session_state.next_reserva_idx),
-                "pax": pax_ingreso,
-                "zona": zona_ingreso,
-                "tiempo": tiempo_ingreso
-            }
-            st.session_state.reservas_pendientes.append(nueva)
-            st.session_state.next_reserva_idx += 1
+        if st.button("Revisar lista de espera E1", disabled=not st.session_state.lista_espera_e1):
+            if intentar_asignar_desde_espera():
+                st.rerun()
             st.rerun()
-
-    st.write(f"Reserva activa: **{st.session_state.reserva_activa}**")
-    st.write(f"Personas de la reserva activa: **{st.session_state.reserva_pax}**")
-    st.write(f"Zona solicitada: **{st.session_state.reserva_zona}**")
-    st.write(f"Mesa reservada: **{st.session_state.mesa_reservada or '-'}**")
-    st.write(f"Pendientes: **{len(st.session_state.reservas_pendientes)}**")
-    if st.session_state.reservas_pendientes:
-        pendientes = [f'{reserva["nombre"]} ({reserva["pax"]} pers., {reserva["zona"]})' for reserva in st.session_state.reservas_pendientes]
-        st.caption(" | ".join(pendientes))
-
-    if st.button(
-        "Cargar siguiente reserva", disabled=not st.session_state.reservas_pendientes
-    ):
-        cargar_siguiente_reserva()
-        st.rerun()
-
-    if st.button("Revisar lista de espera E1", disabled=not st.session_state.lista_espera_e1):
-        if intentar_asignar_desde_espera():
-            st.rerun()
-        st.rerun()
+    else:
+        st.caption("Modo garzon: interfaz tablet habilitada.")
 
     if st.button("Resetear Simulacion"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        resetear_simulacion_preservando_auth()
         st.rerun()
 
 
@@ -494,291 +610,47 @@ if (
     st.session_state.reserva_A = "NO_SHOW"
     st.session_state.alerta_garzon = False
 
-if st.session_state.reserva_A == "NO_SHOW":
-    st.warning("No-Show activo: la reserva no llego dentro de la tolerancia.")
+if rol_actual == "recepcionista":
+    if st.session_state.reserva_A == "NO_SHOW":
+        st.warning("No-Show activo: la reserva no llego dentro de la tolerancia.")
 
+    st.markdown("### Indicadores de Control Financiero")
+    if st.session_state.costo_cortesia > 0:
+        st.metric(
+            label="Perdidas por Cortesias Incurridas (Retrasos)",
+            value=f"${st.session_state.costo_cortesia} CLP",
+            delta=f"+${st.session_state.costo_cortesia} CLP (Colision Critica)",
+            delta_color="inverse",
+        )
+    else:
+        st.metric(label="Perdidas por Cortesias Incurridas (Retrasos)", value="$0 CLP")
 
-st.markdown("### Indicadores de Control Financiero")
-if st.session_state.costo_cortesia > 0:
-    st.metric(
-        label="Perdidas por Cortesias Incurridas (Retrasos)",
-        value=f"${st.session_state.costo_cortesia} CLP",
-        delta=f"+${st.session_state.costo_cortesia} CLP (Colision Critica)",
-        delta_color="inverse",
+    st.divider()
+
+    render_recepcionista_view(
+        estado_flujo_actual=estado_flujo_actual,
+        obtener_registro_mesas=obtener_registro_mesas,
+        render_mesa_card=render_mesa_card,
+        fmt_dt=fmt_dt,
+        asignar_mesa_por_capacidad=asignar_mesa_por_capacidad,
+        agregar_a_lista_espera=agregar_a_lista_espera,
+        set_estado_mesa=set_estado_mesa,
+        get_estado_mesa=get_estado_mesa,
+    )
+
+    if st.session_state.reserva_A == "COMPLETADA":
+        st.success("Recorrido principal completado con exito.")
+        if st.session_state.reservas_pendientes:
+            if st.button("Iniciar siguiente reserva pendiente"):
+                cargar_siguiente_reserva()
+                st.rerun()
+elif rol_actual == "garzon":
+    render_garzon_view(
+        obtener_registro_mesas=obtener_registro_mesas,
+        render_selectable_mesa=render_selectable_mesa,
+        get_estado_mesa=get_estado_mesa,
+        get_limpieza_restante=get_limpieza_restante,
+        set_estado_mesa=set_estado_mesa,
     )
 else:
-    st.metric(label="Perdidas por Cortesias Incurridas (Retrasos)", value="$0 CLP")
-
-st.divider()
-
-tag_m12 = "Mesa 12 [Cluster Alfa]" if st.session_state.cluster_creado else "Mesa 12"
-tag_m05 = "Mesa 05 [Cluster Alfa]" if st.session_state.cluster_creado else "Mesa 05"
-reserva_label = st.session_state.reserva_activa
-
-tab_recepcionista, tab_garzon = st.tabs(["Recepcionista", "Garzon"])
-
-with tab_recepcionista:
-    st.header("Recepcionista (Mapa Visual)")
-    st.subheader("Mapa Visual del Salon")
-
-    tiempo_restante = "-"
-    if st.session_state.reserva_A == "SENTADA" and st.session_state.checkin_time is not None:
-        transcurrido = int(
-            (st.session_state.reloj_sim - st.session_state.checkin_time).total_seconds() // 60
-        )
-        restante = st.session_state.duracion_bloque_min - transcurrido
-        tiempo_restante = f"{max(0, restante)} min"
-
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Estado Reserva", st.session_state.reserva_A)
-    k2.metric("Tiempo restante bloque", tiempo_restante)
-    k3.metric("Costo cortesia acumulado", f"${st.session_state.costo_cortesia} CLP")
-
-    st.info(f"Estado del flujo actual: {estado_flujo_actual()}")
-
-    st.markdown("**Leyenda visual**")
-    l1, l2, l3, l4 = st.columns(4)
-    l1.success("Disponible")
-    l2.error("Ocupada")
-    l3.warning("En limpieza")
-    l4.warning("Reservada / Cluster")
-
-    st.markdown("**Todas las mesas del salon**")
-    registro_mesas = obtener_registro_mesas()
-    mesas_interior = [
-        (nombre, datos["capacidad"], datos["estado"])
-        for nombre, datos in registro_mesas.items()
-        if datos["zona"] == "Interior"
-    ]
-    mesas_terraza = [
-        (nombre, datos["capacidad"], datos["estado"])
-        for nombre, datos in registro_mesas.items()
-        if datos["zona"] == "Terraza"
-    ]
-
-    st.markdown("### Interior")
-    for fila in range(0, len(mesas_interior), 3):
-        columnas = st.columns(3)
-        for idx, mesa in enumerate(mesas_interior[fila:fila + 3]):
-            with columnas[idx]:
-                render_mesa_card(mesa[0], mesa[1], mesa[2])
-
-    st.markdown("### Terraza")
-    for fila in range(0, len(mesas_terraza), 3):
-        columnas = st.columns(3)
-        for idx, mesa in enumerate(mesas_terraza[fila:fila + 3]):
-            with columnas[idx]:
-                render_mesa_card(mesa[0], mesa[1], mesa[2])
-
-    st.markdown("---")
-    st.write(f"**Estado {reserva_label}:** `{st.session_state.reserva_A}`")
-    st.write(f"Inicio bloque: **{fmt_dt(st.session_state.reserva_inicio)}**")
-    st.write(f"Duracion bloque: **{st.session_state.duracion_bloque_min} min**")
-    st.write(f"Limite No-Show: **{fmt_dt(st.session_state.no_show_deadline)}**")
-
-    if st.session_state.lista_espera_e1:
-        st.markdown("**Lista de Espera E1**")
-        for entrada in st.session_state.lista_espera_e1:
-            espera_txt = f"{entrada['espera_segundos']} s" if entrada["espera_segundos"] is not None else "sin proyeccion exacta"
-            st.write(
-                f"- {entrada['reserva']} ({entrada['pax']} pers., {entrada['zona']}) -> {entrada['mesa_sugerida'] or 'sin mesa sugerida'} | espera estimada: {espera_txt}"
-            )
-
-    if st.session_state.reserva_A == "RESERVADA" and st.session_state.no_show_deadline is not None:
-        mins_to_no_show = int(
-            (st.session_state.no_show_deadline - st.session_state.reloj_sim).total_seconds() // 60
-        )
-        if mins_to_no_show > 0:
-            st.info(f"Faltan {mins_to_no_show} min para activar No-Show.")
-        else:
-            st.warning("Se cumplio la ventana de tolerancia de No-Show.")
-
-    if st.session_state.reserva_A == "CONFIRMA":
-        st.info("Paso 1-4: se registra reserva y se asigna bloque en estado RESERVADA.")
-        st.caption(f"{reserva_label} es para {st.session_state.reserva_pax} personas y pide zona {st.session_state.reserva_zona}.")
-        if st.button(f"Registrar {reserva_label} (asignar bloque)"):
-            mesa_asignada = asignar_mesa_por_capacidad(st.session_state.reserva_pax, st.session_state.reserva_zona)
-            if mesa_asignada is None:
-                agregar_a_lista_espera(reserva_label, st.session_state.reserva_pax, st.session_state.reserva_zona)
-                st.session_state.reserva_A = "E1: Protocolo de Espera"
-                st.session_state.mesa_reservada = None
-                st.warning("No hay mesa disponible con capacidad y zona suficientes. La reserva pasó a lista de espera E1.")
-                st.rerun()
-            else:
-                st.session_state.mesa_reservada = mesa_asignada
-                set_estado_mesa(mesa_asignada, "RESERVADA")
-                st.session_state.reserva_A = "RESERVADA"
-                st.session_state.reserva_inicio = st.session_state.reloj_sim + timedelta(minutes=10)
-                st.session_state.no_show_deadline = st.session_state.reserva_inicio + timedelta(
-                    minutes=15
-                )
-                st.rerun()
-
-    if st.session_state.reserva_A == "E1: Protocolo de Espera":
-        st.warning("E1 - Protocolo de Espera activo: la reserva quedó en lista de espera hasta que exista una mesa adecuada.")
-        if st.session_state.lista_espera_e1:
-            entrada = next((item for item in st.session_state.lista_espera_e1 if item["reserva"] == reserva_label), None)
-            if entrada:
-                espera_txt = (
-                    f"{entrada['espera_segundos']} s" if entrada["espera_segundos"] is not None else "sin proyeccion exacta"
-                )
-                st.caption(
-                    f"Sugerencia: {entrada['mesa_sugerida'] or 'sin sugerencia'} | zona: {entrada['zona']} | espera estimada: {espera_txt}"
-                )
-        st.caption("Usa 'Revisar lista de espera E1' en el sidebar cuando haya una mesa disponible.")
-
-    if st.session_state.reserva_A == "RESERVADA":
-        st.info("Paso 5: al llegar el grupo, se intenta Check-in.")
-        if st.button(f"Marcar llegada de {reserva_label} (Check-in)"):
-            mesa_asignada = st.session_state.mesa_reservada
-            if mesa_asignada and get_estado_mesa(mesa_asignada) == "RESERVADA":
-                st.session_state.reserva_A = "SENTADA"
-                set_estado_mesa(mesa_asignada, "OCUPADA")
-                st.session_state.checkin_time = st.session_state.reloj_sim
-                st.session_state.no_show_deadline = None
-            else:
-                st.session_state.reserva_A = "Check-in: Esperando Mesa"
-                st.session_state.no_show_deadline = None
-            st.rerun()
-
-    if st.session_state.reserva_A == "NO_SHOW":
-        st.error("E2 - Regla No-Show activada: se supero la tolerancia de 15 min.")
-
-    if st.session_state.reserva_A == "Check-in: Esperando Mesa":
-        st.warning("E1 - Protocolo de espera activo: no hay mesa adecuada disponible.")
-        if st.button("Crear Cluster Logico (Mesa 12 + Mesa 05)"):
-            st.session_state.cluster_creado = True
-            st.session_state.mesa_05 = "BLOQUEADA_C"
-            st.session_state.alerta_garzon = True
-            st.session_state.reserva_A = "Asignada a Cluster"
-            st.session_state.costo_cortesia += 5000
-            st.rerun()
-
-    if st.session_state.reserva_A == "Asignada a Cluster":
-        st.info("Cluster creado. Esperando liberacion fisica para sentar la reserva.")
-        st.caption(f"La reserva activa sigue siendo {reserva_label} ({st.session_state.reserva_pax} personas).")
-        if st.session_state.mesa_12 == "DISPONIBLE" and st.button(
-            f"Sentar {reserva_label}"
-        ):
-            st.session_state.reserva_A = "SENTADA"
-            st.session_state.mesa_12 = "OCUPADA"
-            st.session_state.checkin_time = st.session_state.reloj_sim
-            st.rerun()
-
-with tab_garzon:
-    st.header("Garzon (Tablet)")
-
-    st.markdown("### Seleccion visual de mesa")
-    mesas_control = list(obtener_registro_mesas().keys())
-
-    s_row1 = st.columns(3)
-    for idx, mesa_nombre in enumerate(mesas_control[:3]):
-        with s_row1[idx]:
-            render_selectable_mesa(mesa_nombre)
-
-    s_row2 = st.columns(3)
-    for idx, mesa_nombre in enumerate(mesas_control[3:]):
-        with s_row2[idx]:
-            render_selectable_mesa(mesa_nombre)
-
-    mesa_objetivo = st.session_state.mesa_objetivo_garzon
-    st.info(f"Mesa seleccionada: {mesa_objetivo}")
-
-    st.markdown("### Control directo de mesas")
-    st.caption("Checkout = se retira el cliente y la mesa pasa a limpieza. Mesa lista = termino la limpieza y se habilita la mesa.")
-    g1 = st.columns(1)[0]
-    estado_seleccionado = get_estado_mesa(mesa_objetivo)
-    restante_limpieza = get_limpieza_restante(mesa_objetivo)
-    puede_disponible = estado_seleccionado == "EN LIMPIEZA" and restante_limpieza == 0
-
-    if st.button("Marcar MESA LISTA / DISPONIBLE", disabled=not puede_disponible):
-            set_estado_mesa(mesa_objetivo, "DISPONIBLE")
-            st.rerun()
-
-    if estado_seleccionado == "EN LIMPIEZA" and restante_limpieza > 0:
-        st.caption(f"Bloqueo activo: faltan {restante_limpieza} s para poder marcarla disponible.")
-    elif estado_seleccionado not in {"OCUPADA", "EN LIMPIEZA"}:
-        st.caption("Solo puedes pasar de OCUPADA a limpieza con Checkout, y de limpieza a disponible con Mesa lista.")
-
-    if st.session_state.alerta_garzon and st.session_state.mesa_12 == "OCUPADA":
-        st.info("Prioridad Alta: liberar Mesa 12 para cluster.")
-
-    # Monitoreo de estadia (E3)
-    if st.session_state.reserva_A == "SENTADA" and st.session_state.checkin_time is not None:
-        transcurrido = int(
-            (st.session_state.reloj_sim - st.session_state.checkin_time).total_seconds() // 60
-        )
-        restante = st.session_state.duracion_bloque_min - transcurrido
-
-        st.write(f"Tiempo transcurrido: **{max(0, transcurrido)} min**")
-        st.write(f"Tiempo restante bloque: **{restante} min**")
-
-        if restante <= 15 and not st.session_state.alerta_e3_emitida:
-            st.warning("E3 - Alerta preventiva: ofrecer ultimo trago/postre.")
-            if st.button("Registrar aviso preventivo E3"):
-                st.session_state.alerta_e3_emitida = True
-                st.rerun()
-
-        if st.session_state.alerta_e3_emitida:
-            st.markdown("### Decision de Extension")
-            if st.button("Cliente solicita extender +30 min"):
-                if st.session_state.simular_colision_futura:
-                    st.session_state.alerta_colision = True
-                    st.session_state.costo_cortesia += 5000
-                else:
-                    st.session_state.duracion_bloque_min += 30
-                    st.session_state.alerta_e3_emitida = False
-                st.rerun()
-
-    # Mitigacion de colision critica
-    if st.session_state.alerta_colision:
-        st.error("Colision critica: no se puede extender por reserva futura.")
-        if st.session_state.mitigacion_step == 0:
-            if st.button("Entregar cuenta al comensal"):
-                st.session_state.mitigacion_step = 1
-                st.rerun()
-        elif st.session_state.mitigacion_step == 1:
-            if st.button("Avisar al Administrador"):
-                st.session_state.mitigacion_step = 2
-                st.rerun()
-        elif st.session_state.mitigacion_step == 2:
-            if st.button("Registrar reubicacion (barra/terraza)"):
-                st.session_state.mitigacion_step = 3
-                st.rerun()
-        else:
-            st.success("Mitigacion completada. Listo para registrar salida.")
-
-    can_checkout = estado_seleccionado == "OCUPADA"
-    if st.button(
-        f"Registrar salida de comensales (Checkout) de {mesa_objetivo}",
-        disabled=not can_checkout,
-    ):
-        set_estado_mesa(mesa_objetivo, "EN LIMPIEZA")
-        st.rerun()
-
-    if get_estado_mesa(mesa_objetivo) == "EN LIMPIEZA":
-        st.write(f"Accion: Higienizando {mesa_objetivo} (bloqueo real de 3 minutos).")
-        remaining = get_limpieza_restante(mesa_objetivo)
-        st.write(f"Tiempo restante para habilitar: **{remaining} s**")
-
-        if remaining > 0:
-            st.info("Todavia no se puede habilitar la mesa.")
-
-        if st.button(f"Mesa lista para {mesa_objetivo}", disabled=remaining > 0):
-            set_estado_mesa(mesa_objetivo, "DISPONIBLE")
-            if mesa_objetivo == "Mesa 12":
-                if st.session_state.reserva_A in {"Asignada a Cluster", "Check-in: Esperando Mesa"}:
-                    st.session_state.reserva_A = "SENTADA"
-                    st.session_state.mesa_12 = "OCUPADA"
-                    st.session_state.checkin_time = st.session_state.reloj_sim
-                elif st.session_state.reserva_A == "SENTADA":
-                    st.session_state.reserva_A = "COMPLETADA"
-            st.rerun()
-
-
-if st.session_state.reserva_A == "COMPLETADA":
-    st.success("Recorrido principal completado con exito.")
-    if st.session_state.reservas_pendientes:
-        if st.button("Iniciar siguiente reserva pendiente"):
-            cargar_siguiente_reserva()
-            st.rerun()
+    st.error(f"Rol no soportado: {rol_actual}")
