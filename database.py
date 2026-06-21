@@ -383,3 +383,67 @@ def verificar_y_limpiar_no_shows_db(reloj_sim_actual_dt) -> list:
         raise e
     finally:
         conn.close()
+
+
+def crear_reserva_cluster_db(cliente_nombre, lista_mesas) -> tuple[bool, str]:
+    """
+    CONTRATO ACID ROBUSTO: Une Mesa 12 y Mesa 05 de forma atómica.
+    Resuelve de raíz el conflicto (NOT NULL + FOREIGN KEY) inyectando de forma segura
+    una mesa virtual 'CLUSTER_M' en el catálogo para dar consistencia total.
+    """
+    import sqlite3
+    from datetime import datetime
+    
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    
+    # 1. Aseguramos la existencia de la tabla intermedia Many-to-Many (1NF)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS reserva_mesas (
+        reserva_id INTEGER NOT NULL,
+        mesa_id TEXT NOT NULL,
+        PRIMARY KEY (reserva_id, mesa_id),
+        FOREIGN KEY (reserva_id) REFERENCES reservas(id) ON DELETE CASCADE,
+        FOREIGN KEY (mesa_id) REFERENCES mesas(id) ON DELETE CASCADE
+    )
+    """)
+    
+    # 2. 🔥 SOLUCIÓN INGENIERIL: Insertamos una mesa virtual en el catálogo general.
+    # Satisface el NOT NULL de la columna y el FOREIGN KEY de una sola pasada.
+    cursor.execute("""
+    INSERT OR IGNORE INTO mesas (id, capacidad, zona, estado)
+    VALUES ('CLUSTER_M', 0, 'Virtual', 'BLOQUEADA_C')
+    """)
+    conn.commit()
+    
+    try:
+        
+        cursor.execute("BEGIN IMMEDIATE TRANSACTION;")
+        
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT INTO reservas (cliente, cantidad_comensales, estado, fecha_hora_inicio, fecha_hora_fin, mesa_id)
+            VALUES (?, 0, 'Asignada a Cluster', ?, ?, 'CLUSTER_M')
+        """, (cliente_nombre, now_str, now_str))
+        reserva_id = cursor.lastrowid
+        
+        for mesa in lista_mesas:
+            cursor.execute("UPDATE mesas SET estado = 'BLOQUEADA_C' WHERE id = ? AND estado = 'DISPONIBLE'", (mesa,))
+            
+            if cursor.rowcount == 0:
+                cursor.execute("ROLLBACK;")
+                return False, f"La '{mesa}' no se encuentra DISPONIBLE en este momento. Operación abortada."
+   
+            cursor.execute("INSERT INTO reserva_mesas (reserva_id, mesa_id) VALUES (?, ?)", (reserva_id, mesa))
+            
+        cursor.execute("COMMIT;")
+        return True, "Clúster transaccional verificado por rowcount con éxito (Consistencia Total)."
+        
+    except sqlite3.Error as e:
+        try:
+            cursor.execute("ROLLBACK;")
+        except:
+            pass
+        return False, f"Fallo crítico en el motor relacional: {str(e)}"
+    finally:
+        conn.close()

@@ -175,6 +175,26 @@ def render_recepcionista_view(
                     f"Sugerencia: {entrada['mesa_sugerida'] or 'sin sugerencia'} | zona: {entrada['zona']} | espera estimada: {espera_txt}"
                 )
         st.caption("Usa 'Revisar lista de espera E1' en el sidebar cuando haya una mesa disponible.")
+        
+        # 🔥 SOLUCIÓN: El botón transaccional ahora vive en el estado correcto de tu flujo
+        if st.button("Crear Cluster Logico (Mesa 12 + Mesa 05)", use_container_width=True):
+            import database as db
+            
+            exito, mensaje = db.crear_reserva_cluster_db(
+                st.session_state.reserva_activa, 
+                ["Mesa 12", "Mesa 05"]
+            )
+            
+            if exito:
+                st.session_state.cluster_creado = True
+                st.session_state.mesa_05 = "BLOQUEADA_C"
+                st.session_state.alerta_garzon = True
+                st.session_state.reserva_A = "Asignada a Cluster"
+                st.session_state.costo_cortesia += 5000
+                st.success(f"🚨 {mensaje}")
+                st.rerun()
+            else:
+                st.error(f"❌ Fallo de Atomicidad ACID: {mensaje}")
 
     if st.session_state.reserva_A == "RESERVADA":
         st.info("Paso 5: al llegar el grupo, se intenta Check-in.")
@@ -190,7 +210,6 @@ def render_recepcionista_view(
                 st.session_state.no_show_deadline = None
             st.rerun()
 
-        # 🔥 EXCEPCIÓN E1: Formulario transaccional metido en el ciclo operativo correcto
         st.markdown("---")
         st.markdown("##### 📞 ¿El cliente llamó para avisar un retraso? (Excepción E1)")
         
@@ -203,47 +222,29 @@ def render_recepcionista_view(
                 
             if st.button("Aplicar Excepción E1 y Postergar Bloque", use_container_width=True):
                 import database as db
-                
-                # Ejecutamos el contrato de validación transaccional en el backend
                 exito, mensaje = db.registrar_retraso_cortesia_db(
                     st.session_state.reserva_activa, 
                     minutos_atraso, 
                     monto_cortesia
                 )
-                
                 if exito:
-                    # Sincronizamos las variables del simulador en memoria RAM
                     if st.session_state.reserva_inicio is not None:
                         st.session_state.reserva_inicio += timedelta(minutes=minutos_atraso)
                     if st.session_state.no_show_deadline is not None:
                         st.session_state.no_show_deadline += timedelta(minutes=minutos_atraso)
-                        
                     st.success(f"✅ {mensaje}")
                     st.toast("💰 Control Financiero: Pérdida por cortesía registrada en disco.", icon="🚨")
                     st.rerun()
                 else:
-                    # Bloqueamos la UI y mostramos el motivo del rollback de SQLite
                     st.error(f"🚨 Operación Abortada: {mensaje}")
 
     if st.session_state.reserva_A == "NO_SHOW":
         st.error("E2 - Regla No-Show activada: se supero la tolerancia de 15 min.")
 
-    if st.session_state.reserva_A == "Check-in: Esperando Mesa":
-        st.warning("E1 - Protocolo de espera activo: no hay mesa adecuada disponible.")
-        if st.button("Crear Cluster Logico (Mesa 12 + Mesa 05)"):
-            st.session_state.cluster_creado = True
-            st.session_state.mesa_05 = "BLOQUEADA_C"
-            st.session_state.alerta_garzon = True
-            st.session_state.reserva_A = "Asignada a Cluster"
-            st.session_state.costo_cortesia += 5000
-            st.rerun()
-
     if st.session_state.reserva_A == "Asignada a Cluster":
         st.info("Cluster creado. Esperando liberacion fisica para sentar la reserva.")
         st.caption(f"La reserva activa sigue siendo {reserva_label} ({st.session_state.reserva_pax} personas).")
-        if st.session_state.mesa_12 == "DISPONIBLE" and st.button(
-            f"Sentar {reserva_label}"
-        ):
+        if st.session_state.mesa_12 == "DISPONIBLE" and st.button(f"Sentar {reserva_label}"):
             st.session_state.reserva_A = "SENTADA"
             st.session_state.mesa_12 = "OCUPADA"
             st.session_state.checkin_time = st.session_state.reloj_sim
