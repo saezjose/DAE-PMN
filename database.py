@@ -40,16 +40,20 @@ def inicializar_base_de_datos():
         """)
         
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS reservas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente TEXT NOT NULL,
-            cantidad_comensales INTEGER NOT NULL,
-            bloque_horario TEXT NOT NULL,
-            estado TEXT NOT NULL,
-            costo_cortesia INTEGER DEFAULT 0
+            CREATE TABLE IF NOT EXISTS reservas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cliente TEXT NOT NULL,
+                cantidad_comensales INTEGER NOT NULL,
+                mesa_id TEXT NOT NULL,
+                fecha_hora_inicio TEXT NOT NULL,
+                fecha_hora_fin TEXT NOT NULL,
+                estado TEXT NOT NULL,
+                costo_cortesia INTEGER DEFAULT 0,
+                FOREIGN KEY (mesa_id) REFERENCES mesas(id) ON DELETE CASCADE
         )
         """)
-        
+
+
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS historial_estados (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,6 +177,207 @@ def actualizar_estado_mesa_db(mesa_id: str, nuevo_estado: str) -> bool:
         conn.commit()
         return True
         
+    except sqlite3.Error as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+def registrar_retraso_cortesia_db(cliente_nombre, minutos_retraso, costo) -> tuple[bool, str]:
+    """
+    PASO 1 al 5: Aplica la Excepción E1 con validación transaccional estricta (BEGIN IMMEDIATE).
+    Calcula el desplazamiento, valida solapamientos futuros (Regla D1) y, si hay choque,
+    aplica un ROLLBACK para proteger la integridad del sistema.
+    """
+    import sqlite3
+    from datetime import datetime, timedelta
+    
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    
+    # Asegurar defensivamente que existan las columnas del modelo de tiempo real
+    for columna, tipo in [("fecha_hora_inicio", "TEXT"), ("fecha_hora_fin", "TEXT"), ("mesa_id", "TEXT"), ("costo_cortesia", "INTEGER DEFAULT 0")]:
+        try:
+            cursor.execute(f"ALTER TABLE reservas ADD COLUMN {columna} {tipo}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass # Si la columna ya existe, SQLite la ignora de forma segura
+            
+    try:
+        # 1. Iniciar Transacción Inmediata (Bloqueo de escrituras concurrentes)
+        cursor.execute("BEGIN IMMEDIATE TRANSACTION;")
+        
+        # Obtener los datos actuales del intervalo comprometido
+        cursor.execute("""
+            SELECT id, mesa_id, fecha_hora_inicio, fecha_hora_fin 
+            FROM reservas 
+            WHERE cliente = ? AND estado = 'RESERVADA'
+            LIMIT 1
+        """, (cliente_nombre,))
+        reserva = cursor.fetchone()
+        
+        if not reserva:
+            cursor.execute("ROLLBACK;")
+            return False, "No se encontró una reserva activa y confirmada para este cliente."
+            
+        res_id, mesa_id, inicio_str, fin_str = reserva
+        
+        # Validar que la reserva no tenga ya campos nulos por un error previo
+        if not inicio_str or not fin_str:
+            cursor.execute("ROLLBACK;")
+            return False, "La reserva no contiene un intervalo de tiempo válido para desplazar."
+
+        # 2. Calcular nuevo intervalo (Opción A: Desplazar el bloque completo)
+        fmt = "%Y-%m-%d %H:%M:%S"
+        inicio_dt = datetime.strptime(inicio_str, fmt)
+        fin_dt = datetime.strptime(fin_str, fmt)
+        
+        nuevo_inicio_dt = inicio_dt + timedelta(minutes=minutos_retraso)
+        nuevo_fin_dt = fin_dt + timedelta(minutes=minutos_retraso)
+        
+        nuevo_inicio_str = nuevo_inicio_dt.strftime(fmt)
+        nuevo_fin_str = nuevo_fin_dt.strftime(fmt)
+        
+        # 3. Validar Solapamiento (Reutilizar Regla D1 contra OTRAS reservas de la misma mesa)
+        cursor.execute("""
+            SELECT cliente 
+            FROM reservas 
+            WHERE mesa_id = ? 
+              AND id != ? 
+              AND estado = 'RESERVADA'
+              AND (fecha_hora_inicio < ? AND fecha_hora_fin > ?)
+            LIMIT 1
+        """, (mesa_id, res_id, nuevo_fin_str, nuevo_inicio_str))
+        
+        colision = cursor.fetchone()
+        
+        if colision:
+            # 5. Condición de Fallo: Abortar de inmediato y proteger reservas futuras
+            cursor.execute("ROLLBACK;")
+            return False, f"Peligro de sobreventa: El retraso colisiona con la reserva futura de '{colision[0]}'."
+            
+        # 4. Condición de Éxito: Sentar el cambio y guardar la pérdida en el disco
+        cursor.execute("""
+            UPDATE reservas 
+            SET fecha_hora_inicio = ?,
+                fecha_hora_fin = ?,
+                costo_cortesia = ?
+            WHERE id = ?
+        """, (nuevo_inicio_str, nuevo_fin_str, costo, res_id))
+        
+        cursor.execute("COMMIT;")
+        return True, "Cortesía procesada. El bloque horario se desplazó de manera segura."
+        
+    except sqlite3.Error as e:
+        try:
+            cursor.execute("ROLLBACK;")
+        except:
+            pass
+        return False, f"Error transaccional en SQLite: {str(e)}"
+    finally:
+        conn.close()
+
+
+def obtener_total_cortesias_db() -> int:
+    """
+    Suma el costo total de cortesías monetarias registradas directamente en el disco duro.
+    """
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT SUM(costo_cortesia) FROM reservas")
+        resultado = cursor.fetchone()[0]
+        return resultado if resultado is not None else 0
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
+
+def verificar_colision_db(mesa_id: str, inicio_str: str, fin_str: str) -> bool:
+    """
+    Aplica el teorema del solapamiento de intervalos directamente en SQL.
+    Retorna True si hay choque de horarios en la misma mesa, False si está libre.
+    """
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    try:
+        # Regla: Nueva_Inicio < Existente_Fin Y Nueva_Fin > Existente_Inicio
+        cursor.execute("""
+            SELECT COUNT(*) FROM reservas
+            WHERE mesa_id = ? 
+              AND estado NOT IN ('CANCELADA', 'COMPLETADA')
+              AND fecha_hora_inicio < ?
+              AND fecha_hora_fin > ?
+        """, (mesa_id, fin_str, inicio_str))
+        conteo = cursor.fetchone()[0]
+        return conteo > 0
+    finally:
+        conn.close()
+
+def registrar_reserva_db(cliente: str, cantidad: int, mesa_id: str, inicio_str: str, fin_str: str) -> bool:
+    """
+    Valida la colisión horaria. Si no hay tope, inserta la reserva
+    de forma persistente en disco y retorna True. Si está ocupada, aborta (False).
+    """
+    # 1. Ejecutar el filtro defensivo en SQL antes de meter datos
+    if verificar_colision_db(mesa_id, inicio_str, fin_str):
+        return False  # Bloqueado por colisión horaria
+        
+    # 2. Si el bloque está limpio, se guarda de verdad en el archivo .db
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO reservas (cliente, cantidad_comensales, mesa_id, fecha_hora_inicio, fecha_hora_fin, estado)
+            VALUES (?, ?, ?, ?, ?, 'RESERVADA')
+        """, (cliente, cantidad, mesa_id, inicio_str, fin_str))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+def verificar_y_limpiar_no_shows_db(reloj_sim_actual_dt) -> list:
+    """
+    Busca reservas en estado 'RESERVADA' que superaron los 15 minutos de tolerancia
+    respecto al reloj simulado. Las cancela y libera las mesas directamente en disco.
+    Retorna una lista con los nombres de clientes penalizados para actualizar la UI.
+    """
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    no_shows_detectados = []
+    try:
+        # Convertimos el reloj actual a string ISO para compararlo en SQLite
+        reloj_str = reloj_sim_actual_dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Query defensiva: ¿La hora de inicio + 15 minutos es menor o igual al reloj actual?
+        cursor.execute("""
+            SELECT id, cliente, mesa_id 
+            FROM reservas 
+            WHERE estado = 'RESERVADA' 
+              AND datetime(fecha_hora_inicio, '+15 minutes') <= ?
+        """, (reloj_str,))
+        
+        filas = cursor.fetchall()
+        for res_id, cliente, mesa_id in filas:
+            no_shows_detectados.append((cliente, mesa_id))
+            
+            # 1. Cambiar el estado de la reserva a NO_SHOW
+            cursor.execute("UPDATE reservas SET estado = 'NO_SHOW' WHERE id = ?", (res_id,))
+            
+            # 2. Liberar la mesa físicamente en la tabla mesas
+            cursor.execute("UPDATE mesas SET estado = 'DISPONIBLE' WHERE id = ?", (mesa_id,))
+            
+            # 3. Registrar el movimiento en el historial de auditoría
+            cursor.execute("""
+                INSERT INTO historial_estados (mesa_id, estado_anterior, estado_nuevo, timestamp)
+                VALUES (?, 'RESERVADA', 'DISPONIBLE', ?)
+            """, (mesa_id, reloj_str))
+            
+        conn.commit()
+        return no_shows_detectados
     except sqlite3.Error as e:
         conn.rollback()
         raise e

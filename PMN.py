@@ -451,7 +451,7 @@ def set_estado_mesa(nombre: str, estado: str) -> None:
     if estado == "EN LIMPIEZA" and estado_actual not in {"OCUPADA"}:
         return
 
-    if estado == "DISPONIBLE" and estado_actual not in {"EN LIMPIEZA"}:
+    if estado == "DISPONIBLE" and estado_actual not in {"EN LIMPIEZA", "RESERVADA"}:
         return
 
     if nombre == "Mesa 12":
@@ -781,21 +781,33 @@ with st.sidebar:
         st.rerun()
 
 
-# Regla automatica de No-Show (D2)
-if (
-    st.session_state.reserva_A == "RESERVADA"
-    and st.session_state.reserva_inicio is not None
-    and st.session_state.no_show_deadline is None
-):
-    st.session_state.no_show_deadline = st.session_state.reserva_inicio + timedelta(minutes=15)
+import database as db
 
-if (
-    st.session_state.reserva_A == "RESERVADA"
-    and st.session_state.no_show_deadline is not None
-    and st.session_state.reloj_sim >= st.session_state.no_show_deadline
-):
-    st.session_state.reserva_A = "NO_SHOW"
-    st.session_state.alerta_garzon = False
+
+if "no_shows_mitigados" not in st.session_state:
+    st.session_state.no_shows_mitigados = set()
+
+if "reloj_sim" in st.session_state:
+    no_shows_procesados = db.verificar_y_limpiar_no_shows_db(st.session_state.reloj_sim)
+
+    nuevos_no_shows = [
+        (cliente, mesa_id) for cliente, mesa_id in no_shows_procesados 
+        if cliente not in st.session_state.no_shows_mitigados
+    ]
+    
+    if nuevos_no_shows:
+        for cliente, mesa_id in nuevos_no_shows:
+            if "reserva_activa" in st.session_state and st.session_state.reserva_activa == cliente:
+                st.session_state.reserva_A = "NO_SHOW"
+                st.session_state.mesa_reservada = None
+            
+            set_estado_mesa(mesa_id, "DISPONIBLE")
+           
+            st.session_state.no_shows_mitigados.add(cliente)
+            
+            st.toast(f"⏰ No-Show Global: Se liberó la {mesa_id} de {cliente}.", icon="🚨")
+        
+        st.rerun()
 
 if rol_actual == "recepcionista":
     if st.session_state.reserva_A == "NO_SHOW":

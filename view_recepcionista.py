@@ -13,6 +13,7 @@ def render_recepcionista_view(
     set_estado_mesa,
     get_estado_mesa,
 ) -> None:
+   
     st.header("Mapa Visual")
     st.caption("Panel operativo de reservas, estados y asignacion de mesas.")
 
@@ -43,10 +44,15 @@ def render_recepcionista_view(
         restante = st.session_state.duracion_bloque_min - transcurrido
         tiempo_restante = f"{max(0, restante)} min"
 
+    
+  
     k1, k2, k3 = st.columns(3)
+    import database as db
+    total_cortesias_reales = db.obtener_total_cortesias_db()
+
     k1.metric("Estado Reserva", st.session_state.reserva_A)
     k2.metric("Tiempo restante bloque", tiempo_restante)
-    k3.metric("Costo cortesia acumulado", f"${st.session_state.costo_cortesia} CLP")
+    k3.metric("Costo cortesia acumulado", f"${total_cortesias_reales:,} CLP")
 
     st.info(f"Estado del flujo actual: {estado_flujo_actual()}")
 
@@ -116,8 +122,10 @@ def render_recepcionista_view(
     if st.session_state.reserva_A == "CONFIRMA":
         st.info("Paso 1-4: se registra reserva y se asigna bloque en estado RESERVADA.")
         st.caption(f"{reserva_label} es para {st.session_state.reserva_pax} personas y pide zona {st.session_state.reserva_zona}.")
+        
         if st.button(f"Registrar {reserva_label} (asignar bloque)"):
             mesa_asignada = asignar_mesa_por_capacidad(st.session_state.reserva_pax, st.session_state.reserva_zona)
+            
             if mesa_asignada is None:
                 agregar_a_lista_espera(reserva_label, st.session_state.reserva_pax, st.session_state.reserva_zona)
                 st.session_state.reserva_A = "E1: Protocolo de Espera"
@@ -125,14 +133,35 @@ def render_recepcionista_view(
                 st.warning("No hay mesa disponible con capacidad y zona suficientes. La reserva paso a lista de espera E1.")
                 st.rerun()
             else:
-                st.session_state.mesa_reservada = mesa_asignada
-                set_estado_mesa(mesa_asignada, "RESERVADA")
-                st.session_state.reserva_A = "RESERVADA"
-                st.session_state.reserva_inicio = st.session_state.reloj_sim + timedelta(minutes=10)
-                st.session_state.no_show_deadline = st.session_state.reserva_inicio + timedelta(
-                    minutes=15
+    
+                import database as db
+                
+                
+                reserva_inicio_dt = st.session_state.reloj_sim + timedelta(minutes=10)
+                reserva_fin_dt = reserva_inicio_dt + timedelta(minutes=st.session_state.duracion_bloque_min)
+                
+                
+                inicio_iso = reserva_inicio_dt.strftime("%Y-%m-%d %H:%M:%S")
+                fin_iso = reserva_fin_dt.strftime("%Y-%m-%d %H:%M:%S")
+                
+                exito_registro = db.registrar_reserva_db(
+                    cliente=reserva_label,
+                    cantidad=st.session_state.reserva_pax,
+                    mesa_id=mesa_asignada,
+                    inicio_str=inicio_iso,
+                    fin_str=fin_iso
                 )
-                st.rerun()
+                
+                if exito_registro:
+                    st.session_state.mesa_reservada = mesa_asignada
+                    set_estado_mesa(mesa_asignada, "RESERVADA")
+                    st.session_state.reserva_A = "RESERVADA"
+                    st.session_state.reserva_inicio = reserva_inicio_dt
+                    st.session_state.no_show_deadline = reserva_inicio_dt + timedelta(minutes=15)
+                    st.success(f"¡Reserva grabada con éxito en {mesa_asignada} de forma persistente!")
+                    st.rerun()
+                else:
+                    st.error(f" Choque de Horarios (Regla D1): La {mesa_asignada} ya está comprometida en el rango {inicio_iso[-8:-3]} - {fin_iso[-8:-3]} en SQLite. Registro rechazado.")
 
     if st.session_state.reserva_A == "E1: Protocolo de Espera":
         st.warning("E1 - Protocolo de Espera activo: la reserva quedo en lista de espera hasta que exista una mesa adecuada.")
@@ -160,6 +189,41 @@ def render_recepcionista_view(
                 st.session_state.reserva_A = "Check-in: Esperando Mesa"
                 st.session_state.no_show_deadline = None
             st.rerun()
+
+        # 🔥 EXCEPCIÓN E1: Formulario transaccional metido en el ciclo operativo correcto
+        st.markdown("---")
+        st.markdown("##### 📞 ¿El cliente llamó para avisar un retraso? (Excepción E1)")
+        
+        with st.expander("Registrar Aviso de Retraso / Cortesía Financiera"):
+            col_min, col_costo = st.columns(2)
+            with col_min:
+                minutos_atraso = st.number_input("Minutos de postergación:", min_value=5, max_value=45, value=15, step=5)
+            with col_costo:
+                monto_cortesia = st.number_input("Costo de la cortesía (CLP):", min_value=0, value=15000, step=5000)
+                
+            if st.button("Aplicar Excepción E1 y Postergar Bloque", use_container_width=True):
+                import database as db
+                
+                # Ejecutamos el contrato de validación transaccional en el backend
+                exito, mensaje = db.registrar_retraso_cortesia_db(
+                    st.session_state.reserva_activa, 
+                    minutos_atraso, 
+                    monto_cortesia
+                )
+                
+                if exito:
+                    # Sincronizamos las variables del simulador en memoria RAM
+                    if st.session_state.reserva_inicio is not None:
+                        st.session_state.reserva_inicio += timedelta(minutes=minutos_atraso)
+                    if st.session_state.no_show_deadline is not None:
+                        st.session_state.no_show_deadline += timedelta(minutes=minutos_atraso)
+                        
+                    st.success(f"✅ {mensaje}")
+                    st.toast("💰 Control Financiero: Pérdida por cortesía registrada en disco.", icon="🚨")
+                    st.rerun()
+                else:
+                    # Bloqueamos la UI y mostramos el motivo del rollback de SQLite
+                    st.error(f"🚨 Operación Abortada: {mensaje}")
 
     if st.session_state.reserva_A == "NO_SHOW":
         st.error("E2 - Regla No-Show activada: se supero la tolerancia de 15 min.")
