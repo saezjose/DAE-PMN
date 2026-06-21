@@ -314,6 +314,69 @@ def verificar_colision_db(mesa_id: str, inicio_str: str, fin_str: str) -> bool:
     finally:
         conn.close()
 
+
+def marcar_reserva_ocupada_db(cliente: str, mesa_id: str) -> bool:
+    """Marca la reserva activa como OCUPADA cuando se realiza el check-in."""
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE reservas
+            SET estado = 'OCUPADA'
+            WHERE cliente = ?
+              AND mesa_id = ?
+              AND estado = 'RESERVADA'
+        """, (cliente, mesa_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def puede_extender_reserva_db(cliente: str, mesa_id: str, actual_fin_str: str, nuevo_fin_str: str) -> bool:
+    """Verifica si el bloque siguiente para la misma mesa está libre, excluyendo la reserva actual."""
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT COUNT(*) FROM reservas
+            WHERE mesa_id = ?
+              AND cliente != ?
+              AND estado NOT IN ('CANCELADA', 'COMPLETADA', 'NO_SHOW')
+              AND fecha_hora_inicio < ?
+              AND fecha_hora_fin > ?
+        """, (mesa_id, cliente, nuevo_fin_str, actual_fin_str))
+        return cursor.fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def extender_reserva_db(cliente: str, mesa_id: str, actual_fin_str: str, nuevo_fin_str: str) -> tuple[bool, str]:
+    """Intenta extender el bloque de una reserva activa 30 minutos si no hay colisión futura."""
+    if not puede_extender_reserva_db(cliente, mesa_id, actual_fin_str, nuevo_fin_str):
+        return False, "El bloque siguiente en esta mesa ya está ocupado."
+
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE reservas
+            SET fecha_hora_fin = ?
+            WHERE cliente = ?
+              AND mesa_id = ?
+              AND estado NOT IN ('CANCELADA', 'COMPLETADA', 'NO_SHOW')
+        """, (nuevo_fin_str, cliente, mesa_id))
+        if cursor.rowcount == 0:
+            return False, "No se encontró una reserva activa para extender."
+        conn.commit()
+        return True, "El tiempo de estadía se extendió 30 minutos con éxito."
+    except sqlite3.Error as e:
+        conn.rollback()
+        return False, f"Error de base de datos al intentar extender la reserva: {str(e)}"
+    finally:
+        conn.close()
+
+
 def registrar_reserva_db(cliente: str, cantidad: int, mesa_id: str, inicio_str: str, fin_str: str) -> bool:
     """
     Valida la colisión horaria. Si no hay tope, inserta la reserva

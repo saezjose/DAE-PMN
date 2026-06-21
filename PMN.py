@@ -45,11 +45,11 @@ def init_state() -> None:
         "reloj_sim": now,
         "mesa_12": "OCUPADA",
         "mesa_05": "DISPONIBLE",
-        "reserva_A": "CONFIRMA",
+        "reserva_A": "OCUPADA",
         "reserva_activa": "Reserva A",
         "reserva_pax": 4,
         "reserva_zona": random.choice(["Interior", "Terraza"]),
-        "mesa_reservada": None,
+        "mesa_reservada": "Mesa 12",
         "next_reserva_idx": 2,
         "reservas_pendientes": [],
         "lista_espera_e1": [],
@@ -57,9 +57,14 @@ def init_state() -> None:
         "alerta_garzon": False,
         "costo_cortesia": 0,
         "duracion_bloque_min": 90,
-        "reserva_inicio": None,
+        "reserva_inicio": now - timedelta(minutes=15),
         "no_show_deadline": None,
-        "checkin_time": None,
+        "checkin_time": now - timedelta(minutes=15),
+        "mesa_ocupada_anterior": None,
+        "checkin_time_anterior": None,
+        "duracion_anterior": None,
+        "reserva_inicio_anterior": None,
+        "reserva_activa_anterior": None,
         "limpieza_inicio_sim": None,
         "alerta_e3_emitida": False,
         "alerta_colision": False,
@@ -381,7 +386,7 @@ def estado_flujo_actual() -> str:
         "NO_SHOW": "No-Show aplicado",
         "Check-in: Esperando Mesa": "Protocolo de espera activo",
         "Asignada a Cluster": "Cluster creado y en espera de liberacion",
-        "SENTADA": "Servicio en curso",
+        "OCUPADA": "Servicio en curso",
         "COMPLETADA": "Flujo principal completado",
     }
     return mapping.get(estado, estado)
@@ -653,15 +658,22 @@ def cargar_siguiente_reserva() -> None:
         return
 
     siguiente = st.session_state.reservas_pendientes.pop(0)
+    
+    reserva_anterior_ocupada = st.session_state.mesa_reservada if st.session_state.reserva_A == "OCUPADA" else None
+    checkin_anterior = st.session_state.checkin_time if st.session_state.reserva_A == "OCUPADA" else None
+    duracion_anterior = st.session_state.duracion_bloque_min if st.session_state.reserva_A == "OCUPADA" else None
+    reserva_inicio_anterior = st.session_state.reserva_inicio if st.session_state.reserva_A == "OCUPADA" else None
+    reserva_activa_anterior = st.session_state.reserva_activa if st.session_state.reserva_A == "OCUPADA" else None
+    
     st.session_state.reserva_activa = siguiente["nombre"]
     st.session_state.reserva_pax = siguiente["pax"]
     st.session_state.reserva_zona = siguiente["zona"]
     st.session_state.duracion_bloque_min = siguiente.get("tiempo", 90)
     st.session_state.mesa_reservada = None
+    
     st.session_state.reserva_A = "CONFIRMA"
     st.session_state.reserva_inicio = None
     st.session_state.no_show_deadline = None
-    st.session_state.checkin_time = None
     st.session_state.cluster_creado = False
     st.session_state.alerta_garzon = False
     st.session_state.alerta_colision = False
@@ -669,6 +681,12 @@ def cargar_siguiente_reserva() -> None:
     st.session_state.mitigacion_step = 0
     if st.session_state.mesa_05 == "BLOQUEADA_C":
         st.session_state.mesa_05 = "DISPONIBLE"
+    
+    st.session_state.mesa_ocupada_anterior = reserva_anterior_ocupada
+    st.session_state.checkin_time_anterior = checkin_anterior
+    st.session_state.duracion_anterior = duracion_anterior
+    st.session_state.reserva_inicio_anterior = reserva_inicio_anterior
+    st.session_state.reserva_activa_anterior = reserva_activa_anterior
 
 
 st.set_page_config(layout="wide")
@@ -850,6 +868,7 @@ elif rol_actual == "garzon":
         get_estado_mesa=get_estado_mesa,
         get_limpieza_restante=get_limpieza_restante,
         set_estado_mesa=set_estado_mesa,
+        get_zona_mesa=get_zona_mesa,
     )
 else:
     st.error(f"Rol no soportado: {rol_actual}")

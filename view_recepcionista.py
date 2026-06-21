@@ -37,7 +37,7 @@ def render_recepcionista_view(
     )
 
     tiempo_restante = "-"
-    if st.session_state.reserva_A == "SENTADA" and st.session_state.checkin_time is not None:
+    if st.session_state.reserva_A == "OCUPADA" and st.session_state.checkin_time is not None:
         transcurrido = int(
             (st.session_state.reloj_sim - st.session_state.checkin_time).total_seconds() // 60
         )
@@ -154,7 +154,9 @@ def render_recepcionista_view(
                 
                 if exito_registro:
                     st.session_state.mesa_reservada = mesa_asignada
-                    set_estado_mesa(mesa_asignada, "RESERVADA")
+                    estado_actual = get_estado_mesa(mesa_asignada)
+                    if estado_actual != "OCUPADA":
+                        set_estado_mesa(mesa_asignada, "RESERVADA")
                     st.session_state.reserva_A = "RESERVADA"
                     st.session_state.reserva_inicio = reserva_inicio_dt
                     st.session_state.no_show_deadline = reserva_inicio_dt + timedelta(minutes=15)
@@ -201,7 +203,9 @@ def render_recepcionista_view(
         if st.button(f"Marcar llegada de {reserva_label} (Check-in)"):
             mesa_asignada = st.session_state.mesa_reservada
             if mesa_asignada and get_estado_mesa(mesa_asignada) == "RESERVADA":
-                st.session_state.reserva_A = "SENTADA"
+                import database as db
+                db.marcar_reserva_ocupada_db(st.session_state.reserva_activa, mesa_asignada)
+                st.session_state.reserva_A = "OCUPADA"
                 set_estado_mesa(mesa_asignada, "OCUPADA")
                 st.session_state.checkin_time = st.session_state.reloj_sim
                 st.session_state.no_show_deadline = None
@@ -245,7 +249,7 @@ def render_recepcionista_view(
         st.info("Cluster creado. Esperando liberacion fisica para sentar la reserva.")
         st.caption(f"La reserva activa sigue siendo {reserva_label} ({st.session_state.reserva_pax} personas).")
         if st.session_state.mesa_12 == "DISPONIBLE" and st.button(f"Sentar {reserva_label}"):
-            st.session_state.reserva_A = "SENTADA"
+            st.session_state.reserva_A = "OCUPADA"
             st.session_state.mesa_12 = "OCUPADA"
             st.session_state.checkin_time = st.session_state.reloj_sim
             st.rerun()

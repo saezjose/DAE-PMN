@@ -8,6 +8,7 @@ def render_garzon_view(
     get_estado_mesa,
     get_limpieza_restante,
     set_estado_mesa,
+    get_zona_mesa,
 ) -> None:
     st.markdown("### Seleccion visual de mesa")
     st.caption("Control de salon en tiempo real con acciones rapidas por mesa.")
@@ -66,7 +67,7 @@ def render_garzon_view(
     if st.session_state.alerta_garzon and st.session_state.mesa_12 == "OCUPADA":
         st.info("Prioridad Alta: liberar Mesa 12 para cluster.")
 
-    if st.session_state.reserva_A == "SENTADA" and st.session_state.checkin_time is not None:
+    if st.session_state.reserva_A in {"OCUPADA", "SENTADA"} and st.session_state.checkin_time is not None:
         transcurrido = int(
             (st.session_state.reloj_sim - st.session_state.checkin_time).total_seconds() // 60
         )
@@ -89,6 +90,32 @@ def render_garzon_view(
                     st.session_state.costo_cortesia += 5000
                 else:
                     st.session_state.duracion_bloque_min += 30
+                    st.session_state.alerta_e3_emitida = False
+                st.rerun()
+
+    elif st.session_state.mesa_ocupada_anterior and get_estado_mesa(st.session_state.mesa_ocupada_anterior) == "OCUPADA" and st.session_state.checkin_time_anterior is not None:
+        st.markdown(f"### Mesa anterior aún ocupada: {st.session_state.mesa_ocupada_anterior}")
+        transcurrido_anterior = int(
+            (st.session_state.reloj_sim - st.session_state.checkin_time_anterior).total_seconds() // 60
+        )
+        restante_anterior = st.session_state.duracion_anterior - transcurrido_anterior if st.session_state.duracion_anterior else 0
+        st.write(f"Tiempo transcurrido: **{max(0, transcurrido_anterior)} min**")
+        st.write(f"Tiempo restante bloque: **{restante_anterior} min**")
+
+        if restante_anterior <= 15 and not st.session_state.alerta_e3_emitida:
+            st.warning("E3 - Alerta preventiva: ofrecer ultimo trago/postre.")
+            if st.button("Registrar aviso preventivo E3"):
+                st.session_state.alerta_e3_emitida = True
+                st.rerun()
+
+        if st.session_state.alerta_e3_emitida:
+            st.markdown("### Decision de Extension")
+            if st.button("Cliente solicita extender +30 min"):
+                if st.session_state.simular_colision_futura:
+                    st.session_state.alerta_colision = True
+                    st.session_state.costo_cortesia += 5000
+                else:
+                    st.session_state.duracion_anterior += 30
                     st.session_state.alerta_e3_emitida = False
                 st.rerun()
 
