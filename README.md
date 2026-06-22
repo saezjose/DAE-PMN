@@ -1,89 +1,77 @@
-# PMN - Prototipo Minimo Navegable: Gestion de Reservas con Contingencias
+# PMN - Prototipo Mínimo Navegable: Gestión Relacional de Reservas con Contingencias
 
-## Informacion del Proyecto
+## Información del Proyecto
 * **Asignatura:** Desarrollo de Aplicaciones Empresariales (INFO1163)
-* **Institucion:** Universidad Catolica de Temuco (UCT), Departamento de Ingenieria Informatica
-* **Integrantes:** Marcelo Matamala, Jose Saez
-* **Profesor:** Gaston Marcelo Contreras Caro
+* **Institución:** Universidad Católica de Temuco (UCT), Departamento de Ingeniería Informática
+* **Integrantes:** Marcelo Matamala, José Sáez
+* **Profesor:** Gastón Marcelo Contreras Caro
 
 ---
 
-## 1. Descripcion General
-Este Prototipo Minimo Navegable (PMN) implementa de forma interactiva el flujo de control y gestion de contingencias desarrollado en el informe del Avance 3. La aplicacion simula el comportamiento logico de un sistema de reservas de restaurant en tiempo real, omitiendo la persistencia en bases de datos relacionales mediante el uso estrategico de gestion de estados en memoria de Streamlit (session_state).
+## 1. Descripción General
+Este Prototipo Mínimo Navegable (PMN) implementa de forma transaccional e interactiva el flujo de control, robustez de datos y gestión de contingencias operativas desarrollado para el ciclo de vida de un restaurante. A diferencia de las aproximaciones iniciales basadas únicamente en estados locales volátiles, esta arquitectura migra la inteligencia del negocio hacia un **backend relacional persistente en disco (SQLite3)**, garantizando el aislamiento de operaciones concurrentes y el cumplimiento estricto de las reglas lógicas del negocio.
 
-El sistema aborda el escenario operativo mas complejo del negocio ("Sabado de Colision Critica"), donde el local opera al 95% de su capacidad. Centraliza la interaccion sincronizada entre dos actores principales de forma asincrona: el Recepcionista (consola central de asignacion con ingreso manual dinamico) y el Garzon (dispositivo tablet movil), eliminando la latencia fisica de comunicacion.
-
----
-
-## 2. Arquitectura del Estado Simulado (Maquina de Estados)
-El motor de la aplicacion funciona como una maquina de estados finitos que gobierna de forma estricta los recursos del salon (Mesas) y el progreso de los clientes (Reservas). Los datos persisten de forma volatil durante la sesion mediante las siguientes variables clave:
-
-* `st.session_state.mesa_12` / `st.session_state.mesa_05`: Controlan la transicion estricta de estados de los activos tangibles (DISPONIBLE, OCUPADA, EN LIMPIEZA, BLOQUEADA_C).
-* `st.session_state.reserva_A`: Realiza el seguimiento secuencial de la traza principal (CONFIRMA, RESERVADA, Check-in: Esperando Mesa, Asignada a Cluster, SENTADA, COMPLETADA).
-* `st.session_state.reloj_sim`: Objeto de tiempo que permite adelantar el cronograma operativo de forma controlada (+5 min / +15 min) para disparar politicas de negocio asincronicas.
-* `st.session_state.duracion_bloque_min`: Atributo temporal de la reserva que muta dinamicamente según la estimacion ingresada por el recepcionista en el front-end.
-* `st.session_state.costo_cortesia`: Variable contable que acumula el impacto financiero negativo incurrido debido a ineficiencias, retrasos o sobre-estadia.
+El sistema aborda con éxito el escenario de estrés operativo más complejo del restaurante ("Sábado de Colisión Crítica"), controlando la interacción síncrona en tiempo real entre dos terminales de usuario corriendo de forma distribuida: la **Estación de Recepción** (para el control de asignaciones, gestión de excepciones y monitoreo financiero) y la **Estación Móvil de Salón** (tablet dedicada para el cuerpo de garzones), erradicando por completo los puntos ciegos de comunicación y la latencia física.
 
 ---
 
-## 3. Mapeo de Reglas de Negocio y Excepciones
-El sistema implementa de manera exacta las soluciones de resiliencia especificadas en la matriz de excepciones del diseño teorico:
+## 2. Arquitectura de Software y Modelo Físico
+La aplicación se desvincula del acoplamiento blando y se estructura mediante una división de responsabilidades limpia (arquitectura multicapa):
 
-### Excepcion 1 (E1) - Protocolo de Espera, Elasticidad de Zonas y Proyeccion
-Cuando la Decision 1 (D1) valida que no hay mesas disponibles que cumplan con la capacidad requerida de forma inmediata, la reserva es derivada a la lista de espera activa. El sistema calcula algoritmicamente una proyeccion en segundos basada en el tiempo restante de higienizacion. Si el cliente selecciona preferencia de zona **"Cualquiera"**, el algoritmo levanta la restriccion espacial y evalua la disponibilidad tanto en Interior como en Terraza para acelerar la asignacion.
+* **`database.py` (Capa de Persistencia Relacional):** Inicializa y gobierna la base de datos física en disco (`restaurante.db`). Implementa un esquema de aislamiento transaccional duro mediante directivas explícitas (`PRAGMA foreign_keys = ON` y transacciones `BEGIN IMMEDIATE`). Controla las tablas de entidades rígidas: `usuarios`, `mesas`, `reservas` y la tabla intermedia Many-to-Many `reserva_mesas` necesaria para preservar la Primera Forma Normal (1NF).
+* **`PMN.py` (Orquestador Central de Estados):** Gobierna el enrutamiento de la sesión del usuario mediante un token seguro (`AUTH_TOKEN`), maneja los privilegios basados en roles (SHA-256 criptográfico para credenciales) y centraliza el reloj simulado (`st.session_state.reloj_sim`) para acelerar de forma controlada el flujo del tiempo durante las auditorías de software.
+* **`view_recepcionista.py` y `view_garzon.py` (Capa de Presentación):** Vistas dedicadas que renderizan la interfaz gráfica. Rompen de forma deliberada el aislamiento de memoria nativo de Streamlit al forzar a la interfaz de usuario (UI) a consultar datos directamente del motor SQLite mediante funciones agregadas y lecturas transaccionales directas del disco duro en cada ciclo de refresco.
 
-### Excepcion 2 (E2) - Regla Automatica de No-Show
-El sistema compara la hora del reloj simulado con el limite de tolerancia parametrizado (15 minutos tras el inicio estimado del bloque). Si el comensal no registra check-in dentro de la ventana, el estado de la reserva muta a `NO_SHOW`, liberando preventivamente el recurso para proteger la rentabilidad por metro cuadrado.
+---
 
-### Excepcion 3 (E3) - Anticipacion Comercial con Bloque Dinamico y Mitigacion de Crisis
-* **Aviso parametrizado:** Exactamente 15 minutos antes de que expire el tiempo estimado personalizado ingresado por el recepcionista para una mesa ocupada, la tablet del Garzon despliega una alerta preventiva obligatoria para incentivar la ultima orden (postre/cuenta).
-* **Protocolo de crisis:** Si el cliente actual exige una extension de tiempo comercial y la simulacion activa una colision futura en esa mesa, el sistema bloquea el cambio automatico y fuerza al usuario a ejecutar los tres pasos secuenciales de mitigacion fisica declarados en el modelo (Entregar cuenta, Notificar Administrador, Registrar reubicacion).
+## 3. Mapeo de Reglas de Negocio, Excepciones e Hitos
+El sistema implementa de forma nativa e indexada en la base de datos las soluciones de resiliencia especificadas en la matriz de diseño:
+
+* **Regla D1 (Filtro SQL Antipenetración - Hito 1):** Consulta indexada a nivel de motor que impide la sobreescritura de bloques horarios, impidiendo físicamente que una mesa sea reservada por dos clientes en el mismo intervalo de tiempo.
+* **Regla D2 (Mecanismo No-Show Defensivo - Hito 2):** Barrido defensivo automatizado en el backend. Cada vez que el reloj avanza, el motor evalúa las reservas inactivas en disco. Si superan los 15 minutos de tolerancia, rescinde automáticamente el bloque, actualiza la auditoría y libera la mesa en la UI.
+* **Excepción E1 (Sincronización Financiera - Hito 3):** Registro persistente y transaccional de costos por cortesía comercial (15,000 CLP) debido a retrasos gestionados con antelación, acoplado de forma directa a una métrica superior reactiva en la UI.
+* **Excepción E2 (Extensión con Mitigación de Zona - Hito 4):** Valida la disponibilidad en disco del rango horario inmediatamente contiguo al checkout programado. Si el bloque posterior está ocupado, aborta la alteración en disco e instruye visualmente al personal en recepción a sugerir una reubicación de zona (ej: de *Interior* a *Terraza*).
+* **Alerta E3 (Anticipación Comercial Visual - Hito 5):** Cálculo dinámico de diferenciales de tiempo decrecientes contra la estampa `fecha_hora_fin` guardada en disco. Al cruzar el umbral crítico, las tarjetas del plano en Streamlit alteran dinámicamente sus hojas de estilo CSS para parpadear, indicando una rotación inminente.
+* **Clústeres Atómicos Transaccionales (Hito 6):** Permite la fusión lógica de múltiples mesas físicas para grupos grandes a través de la tabla intermedia Many-to-Many. Utiliza la propiedad nativa `cursor.rowcount` en Python para capturar fallas silenciosas y ejecutar un `ROLLBACK` manual si cualquiera de los recursos del grupo se encuentra comprometido de forma concurrente.
+* **Validaciones Estadísticas y de Dominio (Hito 7):** Capa defensiva contra el error humano. Sanitiza textos vacíos (`.strip()`), impide nombres de mesas duplicadas cruzando la clave primaria y restringe comensales en negativo parametrizando el atributo `min_value=1` en los componentes numéricos.
+* **Temporizador Autónomo de Sanitización (Hito 8):** Almacena de forma persistente la marca temporal de salida del cliente. La vista `view_garzon.py` calcula de manera decreciente el intervalo obligatorio de 3 minutos (180 segundos) de desinfección, inyectando la propiedad `disabled=True` en el botón de liberación por software para evitar omisiones humanas.
 
 ---
 
 ## 4. Estructura de la Interfaz y UX
-La aplicacion utiliza un diseño de pestañas unificadas (`st.tabs`) sincronizadas por un mismo nucleo de memoria central, eludiendo el punto ciego de aislamiento de Streamlit entre diferentes pestañas del navegador.
-
-* **Barra Lateral (Control Maestro):** Agrupa el control del reloj simulado y un formulario de **Ingreso Manual (Walk-in / Reserva)** que permite definir de forma dinamica la cantidad de personas, preferencia de zona (con opcion flexible Cualquiera) y el tiempo estimado de estadia.
-* **Cabecera de Control Financiero:** Despliega una metrica de alto nivel (`st.metric`) con un delta inverso de color rojo. Visibiliza el impacto economico directo en tiempo real de las decisiones operativas, actuando como un panel gerencial.
-* **Pestaña Recepcionista:** Contiene el Mapa Visual del salon segmentado espacialmente (Interior y Terraza). Utiliza codigos de colores nativos (Verde: Disponible, Rojo: Ocupada, Amarillo/Naranja: Limpieza o Bloqueo) para facilitar el escaneo visual directo del supervisor.
-* **Pestaña Garzon:** Replica la interfaz movil de la tablet en salon. Permite seleccionar de forma interactiva que mesa procesar, monitorear el tiempo transcurrido, atender la alerta E3 y controlar el bloqueo pasivo de desinfeccion (180 segundos).
+* **Barra Lateral (Control Maestro):** Centraliza la manipulación del reloj simulado corporativo (+5 min / +15 min) y los formularios defensivos de captura de datos sanitizados.
+* **Panel de Control Financiero Superior:** Métrica gerencial de alto nivel acoplada en tiempo real al disco duro que calcula el impacto financiero acumulado de las cortesías por demoras de la noche.
+* **Mapa Interactivo del Salón:** Representación visual estructurada y dividida espacialmente por zonas reales (*Interior* y *Terraza*). Las tarjetas de las mesas utilizan lógica condicional y códigos de color corporativos basados en los estados transaccionales recuperados directamente desde la base de datos (Verde: Disponible, Rojo: Ocupado, Naranja/Gris: En Limpieza / Bloqueado).
 
 ---
 
-## 5. Instrucciones de Instalacion y Ejecucion
+## 5. Instrucciones de Instalación y Ejecución
 
 ### Requisitos Previos
 * Python 3.9 o superior.
-* Administrador de paquetes pip instalado.
+* Administrador de paquetes `pip`.
 
-### Instalacion de Dependencias
-Instale el framework Streamlit ejecutando el siguiente comando en la terminal de su sistema operativo:
+### Instalación de Dependencias
+Instale el framework web necesario ejecutando en su terminal:
 ```bash
 pip install streamlit
-```
 
-
-### Ejecucion de la Aplicacion
-
-Descargue el archivo de codigo fuente PMN.py en su directorio local, navegue hacia la ruta correspondiente mediante la terminal y ejecute el servidor de desarrollo:
+### Ejecución de la Aplicación
+Navegue con su terminal hacia la carpeta donde clonó o descargó los archivos del proyecto y ejecute el comando del orquestador central:
 ```bash
 python -m streamlit run PMN.py
-```
-La interfaz se desplegara de forma automatica en su navegador web predeterminado en la direccion local http://localhost:8501.
 
-## 6. Guia de Trazabilidad del Recorrido Principal 
+La aplicación web se desplegará de forma automática en su navegador predeterminado bajo el puerto de desarrollo local: `http://localhost:8501`.
 
+---
 
-Para demostrar el correcto funcionamiento de las nuevas reglas dinámicas de tiempo y zona al evaluador durante la defensa presencial, siga esta secuencia exacta:
+## 6. Guía de Trazabilidad para la Demostración del "Caso Narrado"
+Para validar de forma empírica el comportamiento defensivo del software ante el profesor evaluador, ejecute paso a paso la siguiente ruta crítica durante la simulación del turno de "Sábado de Colisión Crítica":
 
-* **Ingreso Personalizado (Caso Corto):** En el panel de la barra lateral, configure un ingreso manual para 4 personas, zona Cualquiera y baje el tiempo estimado a 30 minutos. Presione Registrar Ingreso al Sistema.
+1. **Alineación de Terminales distribuidos:** Divida su pantalla en dos ventanas de navegador independientes colocadas lado a lado. En la ventana izquierda inicie sesión con credenciales de **Recepcionista** (`view_recepcionista.py`) y en la ventana derecha con rol de **Garzón** (`view_garzon.py`). Verifique que el reloj simulado comience su marcha síncrona en la barra superior.
 
-* **Asignacion e Inicio de Bloque:** Presione Cargar siguiente reserva en la barra lateral. Vaya a la pestaña Recepcionista y haga clic en Registrar Reserva B (asignar bloque). Note como el sistema remueve la restriccion de zona por elegir "Cualquiera" y configura dinamicamente el bloque central en 30 minutos.
-  
-* **Activacion de Consumo:** Haga clic en Marcar llegada de Reserva B (Check-in). La mesa seleccionada pasara al estado OCUPADA y comenzara el cronometro de estadia indexado.
-  
-* **Verificacion de Alerta E3 Automatica:** Dirijase a la pestaña Garzon. Avance el reloj de la barra lateral presionando los botones de tiempo simulado (ej. presione +15 min dos veces). En el momento exacto en que el indicador "Tiempo restante bloque" marque 15 min, la interfaz redibujara la pantalla haciendo saltar el cuadro amarillo obligatorio: "E3 - Alerta preventiva: ofrecer ultimo trago/postre". Esto demuestra la eliminacion de latencia entre el front-end y las reglas de negocio temporales.
-  
-* **Checkout y Bloqueo de Seguridad (Poka-Yoke):** Presione Registrar salida de comensales (Checkout). La mesa mutara a EN LIMPIEZA levantando un bloqueo real de 180 segundos. Intente presionar Mesa lista de inmediato; vera que el sistema bloquea visualmente el boton grisaceo. Avance el tiempo simulado en el sidebar para simular la higienizacion fisica completa y proceda a habilitar la mesa para dejarla nuevamente DISPONIBLE.
+2. **Simulación de la Excepción E1 (Sincronización Financiera en Vivo):** En el panel de la izquierda (Recepción), localice un cliente que se encuentre retrasado y ejecute la acción de prórroga horaria por contingencia. Presione confirmar y observe cómo el panel superior de control financiero **suma de manera instantánea los 15,000 CLP** asignados a la cortesía. Esta métrica no se apoya en memoria volátil; se calcula reactivamente interrogando funciones agregadas directo en el archivo `restaurante.db`.
 
+3. **Auditoría de la Regla D2 (Mecanismo No-Show Autónomo):** Utilice los controles de la barra lateral para avanzar el tiempo simulado en bloques de +15 minutos. En el momento en que una reserva inactiva supere su ventana límite de tolerancia sin haber registrado el check-in correspondiente, el motor de backend ejecutará un barrido relacional que rescindirá el bloque en disco duro. Observe cómo la mesa asociada **cambia de forma automática a color Verde (Disponible)** en el mapa del recepcionista sin intervención del usuario.
+
+4. **Activación del Protocolo Sanitario Poka-Yoke (Checkout y Bloqueo Técnico):** Traslade la atención a la ventana derecha (**Tablet del Garzón**). Seleccione una mesa activa cuyo servicio haya concluido y presione el botón de *Checkout*. El sistema asentará la estampa de tiempo actual en SQLite y la mesa cambiará inmediatamente al estado `EN LIMPIEZA`. Intente forzar la disponibilidad de la mesa haciendo clic en el botón de habilitación; notará que **el botón se inyecta de color gris e inhabilitado (`disabled=True`)**, desplegando de forma dinámica la cuenta regresiva estricta de 180 segundos. Avance el tiempo simulado desde la barra lateral para agotar el contador y observe cómo solo al cumplir el tiempo de sanitización física el botón se desbloquea para regresar la mesa al estado `DISPONIBLE`.
